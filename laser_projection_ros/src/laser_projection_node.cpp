@@ -21,6 +21,7 @@ public:
     color_g_ = declare_parameter("color_g", 255);
     color_b_ = declare_parameter("color_b", 0);
     color_topic_ = declare_parameter("color_topic", std::string("/laser_color"));
+    scan_rate_ = declare_parameter("scan_rate", 20000.0);
     auto backend_name = declare_parameter("backend", std::string("udp"));
     std::shared_ptr<laser_projection::LaserBackend> backend;
     if (backend_name == "helios")
@@ -80,7 +81,8 @@ private:
       projector_->show_path(path, {{t.x, t.y, t.z}, {q.x, q.y, q.z, q.w}},
                             {{static_cast<unsigned char>(color_r_),
                               static_cast<unsigned char>(color_g_),
-                              static_cast<unsigned char>(color_b_)}});
+                              static_cast<unsigned char>(color_b_)}},
+                            {}, scan_rate_);
       visualization_msgs::msg::Marker marker;
       marker.header.frame_id = projection_frame_;
       marker.header.stamp = now();
@@ -110,6 +112,7 @@ private:
   int color_r_{};
   int color_g_{};
   int color_b_{};
+  double scan_rate_{20000.0};
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
   std::unique_ptr<laser_projection::Projector> projector_;
