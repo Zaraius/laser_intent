@@ -2,7 +2,6 @@
 #include "laser_projection_core/projector.hpp"
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -27,7 +26,6 @@ public:
     color_topic_ = declare_parameter("color_topic", std::string("/laser_color"));
     point_spacing_ = declare_parameter("point_spacing", 0.05);
     arrows_ = declare_parameter("arrows", false);
-    demo_arrow_length_ = declare_parameter("demo_arrow_length", 0.5);
     scan_rate_ = declare_parameter("scan_rate", 20000.0);
     surface_z_ = declare_parameter("surface_z", 0.0);
     backend_name_ = declare_parameter("backend", std::string("udp"));
@@ -140,18 +138,24 @@ private:
   }
 
   void draw_demo_arrows(int count) {
-    if (!std::isfinite(demo_arrow_length_) || demo_arrow_length_ <= 0.0) {
-      RCLCPP_ERROR(get_logger(), "demo_arrow_length must be finite and positive");
-      return;
-    }
-    constexpr double gap = 0.2;
-    const double total_width = count * demo_arrow_length_ + (count - 1) * gap;
+    // User-tested floor coordinates; additional arrows share the calibrated x range.
+    constexpr double left_edge = 0.055;
+    constexpr double right_edge = 0.085;
+    constexpr double tail_y = -0.98;
+    constexpr double junction_y = -0.96;
+    constexpr double head_y = -0.962;
     std::vector<std::vector<laser_projection::Point3D>> paths;
     paths.reserve(count);
     for (int i = 0; i < count; ++i) {
-      const double x = -total_width / 2.0 + i * (demo_arrow_length_ + gap);
-      paths.push_back({{x, 0.0, surface_z_},
-                       {x + demo_arrow_length_, 0.0, surface_z_}});
+      const double lane_width = (right_edge - left_edge) / count;
+      const double center_x = left_edge + (i + 0.5) * lane_width;
+      const double head_half_width = lane_width / 2.0;
+      paths.push_back({
+          {center_x, tail_y, surface_z_},
+          {center_x, junction_y, surface_z_},
+          {center_x + head_half_width, head_y, surface_z_},
+          {center_x, junction_y, surface_z_},
+          {center_x - head_half_width, head_y, surface_z_}});
     }
     try {
       const auto projector_tf = tf_buffer_.lookupTransform(
@@ -164,7 +168,7 @@ private:
                        static_cast<unsigned char>(color_g_),
                        static_cast<unsigned char>(color_b_)};
       options.point_spacing = point_spacing_;
-      options.arrows = true;
+      options.arrows = false;
       projector_->show_paths(paths, {{t.x, t.y, t.z}, {q.x, q.y, q.z, q.w}},
                              options, scan_rate_);
     } catch (const tf2::TransformException& error) {
@@ -264,7 +268,6 @@ private:
   int color_b_{};
   double scan_rate_{20000.0};
   double point_spacing_{0.05};
-  double demo_arrow_length_{0.5};
   double surface_z_{};
   bool arrows_{false};
   bool demo_active_{false};

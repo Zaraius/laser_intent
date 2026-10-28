@@ -69,10 +69,26 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
                            local.y * calibration_.scale_y + calibration_.offset_y,
                            options.color, blank});
   };
+  Point3D frame_end = projected_paths.front().front();
+  auto append_blank_travel = [&](const Point3D& start, const Point3D& end) {
+    const double distance = std::hypot(end.x - start.x, end.y - start.y);
+    if (distance < 1e-9) return;
+    const int steps = std::max(
+        1, static_cast<int>(std::ceil(distance / options.point_spacing)));
+    append(start, true);
+    for (int step = 1; step <= steps; ++step) {
+      const double t = static_cast<double>(step) / steps;
+      append({start.x + t * (end.x - start.x),
+              start.y + t * (end.y - start.y),
+              start.z + t * (end.z - start.z)}, true);
+    }
+  };
   for (const auto& projected : projected_paths) {
-    append(projected.front(), true);
+    if (last_frame_.empty()) append(projected.front(), true);
+    else append_blank_travel(frame_end, projected.front());
     if (projected.size() == 1) {
       for (int i = 0; i < 8; ++i) append(projected.front(), false);
+      frame_end = projected.front();
     }
     for (size_t i = 0; i + 1 < projected.size(); ++i) {
       const auto a = projected[i];
@@ -81,7 +97,11 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
       const int steps = std::max(1, static_cast<int>(std::ceil(distance / options.point_spacing)));
       for (int step = 0; step <= steps; ++step) {
         const double t = static_cast<double>(step) / steps;
-        append({a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), a.z}, false);
+        const Point3D point{a.x + t * (b.x - a.x),
+                            a.y + t * (b.y - a.y),
+                            a.z + t * (b.z - a.z)};
+        append(point, false);
+        frame_end = point;
       }
     }
     if (options.arrows && projected.size() > 1) {
@@ -102,8 +122,11 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
               distance / options.point_spacing)));
           for (int step = 0; step <= steps; ++step) {
             const double t = static_cast<double>(step) / steps;
-            append({start.x + t * (end.x - start.x),
-                    start.y + t * (end.y - start.y), start.z}, false);
+            const Point3D point{start.x + t * (end.x - start.x),
+                                start.y + t * (end.y - start.y),
+                                start.z + t * (end.z - start.z)};
+            append(point, false);
+            frame_end = point;
           }
         };
 
@@ -115,6 +138,7 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
       }
     }
   }
+  append_blank_travel(frame_end, projected_paths.front().front());
   return backend_->send_frame(last_frame_, scan_rate);
 }
 

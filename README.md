@@ -33,7 +33,7 @@ Start the node (assuming the projector TF is already being published):
 ros2 run laser_projection_ros laser_projection_node --ros-args \
   -p backend:=helios \
   -p helios_library:=/home/agx/helios_dac/sdk/cpp/shared_library/libHeliosDacAPI.so.new \
-  -p scan_rate:=2000.0
+  -p scan_rate:=2000.0 -p point_spacing:=0.001
 ```
 
 In another terminal, draw one arrow and turn it off:
@@ -43,11 +43,13 @@ ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'arrow'}"
 ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'clear'}"
 ```
 
-Use `arrow 2` through `arrow 20` to draw more arrows. The arrow is continuously
-scanned: the Helios frame has lit RGB points for the strokes and zero-RGB points
-for blank travel between them. Green is intentional; the default is
-`color_r:=0 color_g:=255 color_b:=0`. `clear` now sends the same fixed-point
-black frame used by `stop`, at the configured scan rate.
+The demo arrow uses the measured points: tail `(0.07, -0.98)`, junction
+`(0.07, -0.96)`, and head corners `(0.085, -0.962)` and
+`(0.055, -0.962)`, on the `surface_z` plane. Use `arrow 2` through `arrow 20`
+to fit that many narrower arrows across the same measured X range. The frame
+adds blanked travel back to its start so the repeating scan does not draw a
+stray closing line. Green is intentional; the default is
+`color_r:=0 color_g:=255 color_b:=0`. `clear` sends a black fixed-point frame.
 
 The node publishes `visualization_msgs/Marker` on
 `~/debug_path`. The UDP backend sends one ASCII frame to `127.0.0.1:2345`:
@@ -84,3 +86,18 @@ V1 renders flat-plane paths and optional directional arrows. The Helios backend
 expects a compatible `libHeliosDacAPI.so` at runtime. Text, mesh surfaces,
 distortion calibration, and lifecycle management are intentionally deferred
 until the demo proves the data path.
+
+start tf2:
+ros2 run tf2_ros static_transform_publisher   0 0 1 0 0 0 map laser_projector
+
+start laser:
+ros2 run laser_projection_ros laser_projection_node --ros-args   -p backend:=helios   -p helios_library:=/home/agx/helios_dac/sdk/cpp/shared_library/libHeliosDacAPI.so.new -p scan_rate:=15000.0 -p point_spacing:=0.001
+
+Draw an arrow:
+
+ros2 topic pub --once /plan nav_msgs/msg/Path "{header: {frame_id: map}, poses: [{header: {frame_id: map}, pose: {position: {x: 0.07, y: -0.995, z: 0.0}, orientation: {w: 1.0}}}, {header: {frame_id: map}, pose: {position: {x: 0.07, y: -0.95, z: 0.0}, orientation: {w: 1.0}}}, {header: {frame_id: map}, pose: {position: {x: 0.1, y: -0.952, z: 0.0}, orientation: {w: 1.0}}}, {header: {frame_id: map}, pose: {position: {x: 0.07, y: -0.95, z: 0.0}, orientation: {w: 1.0}}}, {header: {frame_id: map}, pose: {position: {x: 0.04, y: -0.952, z: 0.0}, orientation: {w: 1.0}}}]}"
+
+ros2 topic pub --once /plan nav_msgs/msg/Path "{header: {frame_id: map}, poses: [{header: {frame_id: map}, pose: {position: {x: 0.07, y: -0.98, z: 0.0}, orientation: {w: 1.0}}}, {header: {frame_id: map}, pose: {position: {x: 0.07, y: -0.96, z: 0.0}, orientation: {w: 1.0}}}, {header: {frame_id: map}, pose: {position: {x: 0.085, y: -0.962, z: 0.0}, orientation: {w: 1.0}}}, {header: {frame_id: map}, pose: {position: {x: 0.07, y: -0.96, z: 0.0}, orientation: {w: 1.0}}}, {header: {frame_id: map}, pose: {position: {x: 0.055, y: -0.962, z: 0.0}, orientation: {w: 1.0}}}]}"
+
+draw a single point
+ros2 topic pub --once /plan nav_msgs/msg/Path "{header: {frame_id: map}, poses: [{header: {frame_id: map}, pose: {position: {x: 0.07, y: -0.95, z: 0.00}, orientation: {w: 1.0}}}]}"

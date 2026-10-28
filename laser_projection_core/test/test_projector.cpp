@@ -56,10 +56,11 @@ TEST(Core, OptionalArrowAddsBlankedTravel) {
   EXPECT_TRUE(backend->frame[second_transition + 1].blank);
   EXPECT_FALSE(backend->frame[second_transition + 2].blank);
 
-  // No other points are blank: the shaft and both arms are illuminated.
-  EXPECT_EQ(std::count_if(backend->frame.begin(), backend->frame.end(),
+  // The repeated frame returns to its first point with the laser blanked.
+  EXPECT_GE(std::count_if(backend->frame.begin(), backend->frame.end(),
                           [](const LaserPoint& point) { return point.blank; }),
-            5);
+            10);
+  EXPECT_TRUE(backend->frame.back().blank);
 }
 
 TEST(Core, MultiplePathsKeepBlankedTravelBetweenArrows) {
@@ -69,13 +70,27 @@ TEST(Core, MultiplePathsKeepBlankedTravelBetweenArrows) {
       {{{0, 0, 0}, {1, 0, 0}}, {{0, 1, 0}, {1, 1, 0}}},
       {{0, 0, 1}, {}}, {{255, 0, 0}, 0.25, true}));
 
-  EXPECT_EQ(std::count_if(backend->frame.begin(), backend->frame.end(),
+  EXPECT_GT(std::count_if(backend->frame.begin(), backend->frame.end(),
                           [](const LaserPoint& point) { return point.blank; }),
             10);
-  ASSERT_EQ(backend->frame.size(), 32u);
+  EXPECT_GT(backend->frame.size(), 32u);
   EXPECT_TRUE(backend->frame[0].blank);
-  EXPECT_FALSE(backend->frame[15].blank);
-  EXPECT_TRUE(backend->frame[16].blank);
+  EXPECT_TRUE(backend->frame.back().blank);
+}
+
+TEST(Core, FrameReturnToFirstPointIsBlanked) {
+  auto backend = std::make_shared<TestBackend>();
+  Projector projector(std::make_shared<PlaneSurface>(), backend);
+  ASSERT_TRUE(projector.show_path({{0, 0, 0}, {1, 0, 0}},
+                                  {{0, 0, 1}, {}}, {{255, 0, 0}, 0.25}));
+
+  ASSERT_GE(backend->frame.size(), 11u);
+  EXPECT_TRUE(backend->frame.front().blank);
+  EXPECT_FALSE(backend->frame[5].blank);
+  for (size_t i = 6; i < backend->frame.size(); ++i)
+    EXPECT_TRUE(backend->frame[i].blank);
+  EXPECT_NEAR(backend->frame.back().x, backend->frame.front().x, 1e-9);
+  EXPECT_NEAR(backend->frame.back().y, backend->frame.front().y, 1e-9);
 }
 
 TEST(Core, ProjectorOrientationChangesLocalOutput) {
