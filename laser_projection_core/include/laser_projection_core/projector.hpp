@@ -59,6 +59,9 @@ public:
   bool initialize();
   bool show_path(const std::vector<Point3D>& path, ProjectorPose projector_pose,
                  PathOptions options = {}, double scan_rate = 30000.0);
+  bool show_paths(const std::vector<std::vector<Point3D>>& paths,
+                  ProjectorPose projector_pose, PathOptions options = {},
+                  double scan_rate = 30000.0);
   const std::vector<LaserPoint>& last_frame() const { return last_frame_; }
 private:
   std::shared_ptr<const ProjectionSurface> surface_;

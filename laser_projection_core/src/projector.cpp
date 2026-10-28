@@ -1,6 +1,7 @@
 #include "laser_projection_core/projector.hpp"
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace laser_projection {
 
@@ -33,19 +34,29 @@ bool Projector::initialize() { return backend_->initialize(); }
 
 bool Projector::show_path(const std::vector<Point3D>& path, ProjectorPose projector_pose,
                           PathOptions options, double scan_rate) {
+  return show_paths({path}, projector_pose, options, scan_rate);
+}
+
+bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
+                           ProjectorPose projector_pose, PathOptions options,
+                           double scan_rate) {
   last_frame_.clear();
-  if (path.empty() || options.point_spacing <= 0.0) {
+  if (paths.empty() || options.point_spacing <= 0.0) {
     backend_->blackout();
     return false;
   }
-  std::vector<Point3D> projected;
-  for (const auto& target : path) {
-    auto point = surface_->intersect({projector_pose.position,
-      {target.x - projector_pose.position.x, target.y - projector_pose.position.y,
-       target.z - projector_pose.position.z}});
-    if (point) projected.push_back(*point);
+  std::vector<std::vector<Point3D>> projected_paths;
+  for (const auto& path : paths) {
+    std::vector<Point3D> projected;
+    for (const auto& target : path) {
+      auto point = surface_->intersect({projector_pose.position,
+        {target.x - projector_pose.position.x, target.y - projector_pose.position.y,
+         target.z - projector_pose.position.z}});
+      if (point) projected.push_back(*point);
+    }
+    if (!projected.empty()) projected_paths.push_back(std::move(projected));
   }
-  if (projected.empty()) {
+  if (projected_paths.empty()) {
     backend_->blackout();
     return false;
   }
@@ -58,53 +69,50 @@ bool Projector::show_path(const std::vector<Point3D>& path, ProjectorPose projec
                            local.y * calibration_.scale_y + calibration_.offset_y,
                            options.color, blank});
   };
-  append(projected.front(), true);
-  if (projected.size() == 1) {
-    for (int i = 0; i < 8; ++i) append(projected.front(), false);
-  }
-  for (size_t i = 0; i + 1 < projected.size(); ++i) {
-    const auto a = projected[i];
-    const auto b = projected[i + 1];
-    const double distance = std::hypot(b.x - a.x, b.y - a.y);
-    const int steps = std::max(1, static_cast<int>(std::ceil(distance / options.point_spacing)));
-    for (int step = 0; step <= steps; ++step) {
-      const double t = static_cast<double>(step) / steps;
-      append({a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), a.z}, false);
+  for (const auto& projected : projected_paths) {
+    append(projected.front(), true);
+    if (projected.size() == 1) {
+      for (int i = 0; i < 8; ++i) append(projected.front(), false);
     }
-  }
-  if (options.arrows && projected.size() > 1) {
-    const auto tip = projected.back();
-    const auto from = projected[projected.size() - 2];
-    const double length = std::hypot(tip.x - from.x, tip.y - from.y);
-    if (length > 1e-9) {
-      const double size = std::min(0.2, length * 0.5);
-      const double ux = (tip.x - from.x) / length;
-      const double uy = (tip.y - from.y) / length;
-      const Point3D left{tip.x - size * (ux - uy), tip.y - size * (uy + ux), tip.z};
-      const Point3D right{tip.x - size * (ux + uy), tip.y - size * (uy - ux), tip.z};
+    for (size_t i = 0; i + 1 < projected.size(); ++i) {
+      const auto a = projected[i];
+      const auto b = projected[i + 1];
+      const double distance = std::hypot(b.x - a.x, b.y - a.y);
+      const int steps = std::max(1, static_cast<int>(std::ceil(distance / options.point_spacing)));
+      for (int step = 0; step <= steps; ++step) {
+        const double t = static_cast<double>(step) / steps;
+        append({a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), a.z}, false);
+      }
+    }
+    if (options.arrows && projected.size() > 1) {
+      const auto tip = projected.back();
+      const auto from = projected[projected.size() - 2];
+      const double length = std::hypot(tip.x - from.x, tip.y - from.y);
+      if (length > 1e-9) {
+        const double size = std::min(0.2, length * 0.5);
+        const double ux = (tip.x - from.x) / length;
+        const double uy = (tip.y - from.y) / length;
+        const Point3D left{tip.x - size * (ux - uy), tip.y - size * (uy + ux), tip.z};
+        const Point3D right{tip.x - size * (ux + uy), tip.y - size * (uy - ux), tip.z};
 
-      auto append_stroke = [&](const Point3D& start, const Point3D& end) {
-        // Keep the travel to the next stroke blank, then turn the laser on
-        // while interpolating from the stroke start to its end.
-        append(start, true);
-        const double distance = std::hypot(end.x - start.x, end.y - start.y);
-        const int steps = std::max(1, static_cast<int>(std::ceil(
-            distance / options.point_spacing)));
-        for (int step = 0; step <= steps; ++step) {
-          const double t = static_cast<double>(step) / steps;
-          append({start.x + t * (end.x - start.x),
-                  start.y + t * (end.y - start.y), start.z}, false);
-        }
-      };
+        auto append_stroke = [&](const Point3D& start, const Point3D& end) {
+          append(start, true);
+          const double distance = std::hypot(end.x - start.x, end.y - start.y);
+          const int steps = std::max(1, static_cast<int>(std::ceil(
+              distance / options.point_spacing)));
+          for (int step = 0; step <= steps; ++step) {
+            const double t = static_cast<double>(step) / steps;
+            append({start.x + t * (end.x - start.x),
+                    start.y + t * (end.y - start.y), start.z}, false);
+          }
+        };
 
-      // The shaft ends at the tip. Blank that point before moving to the
-      // first arm, and blank the arm start so the complete travel is dark.
-      append(tip, true);
-      append_stroke(left, tip);
+        append(tip, true);
+        append_stroke(left, tip);
 
-      // Repeat the same transition between the two independent arms.
-      append(tip, true);
-      append_stroke(right, tip);
+        append(tip, true);
+        append_stroke(right, tip);
+      }
     }
   }
   return backend_->send_frame(last_frame_, scan_rate);

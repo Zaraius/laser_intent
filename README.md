@@ -34,6 +34,24 @@ ros2 run laser_projection_ros laser_projection_node \
   -p projection_frame:=map -p projector_frame:=laser_projector
 ```
 
+Enable a directional arrowhead with `arrows:=true`; `point_spacing` controls
+the interpolation spacing for the shaft and arrowhead strokes:
+
+```bash
+ros2 run laser_projection_ros laser_projection_node \
+  --ros-args -p backend:=helios -p arrows:=true -p point_spacing:=0.02
+```
+
+For a standalone demo, publish `arrow` or `arrow <count>` to
+`/laser_command`. The count is limited to 1-20, and
+`demo_arrow_length` controls each arrow's length. `clear` turns the laser off.
+Demo arrows point along +X in `projection_frame`:
+
+```bash
+ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'arrow 3'}"
+ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'clear'}"
+```
+
 For a hardware center-dot test, first publish the projector TF and start the
 node with `-p backend:=helios -p color_r:=255 -p color_g:=255 -p color_b:=255`.
 Then publish a `nav_msgs/msg/Path` containing one point at the floor origin.

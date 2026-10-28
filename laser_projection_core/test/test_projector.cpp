@@ -62,6 +62,22 @@ TEST(Core, OptionalArrowAddsBlankedTravel) {
             5);
 }
 
+TEST(Core, MultiplePathsKeepBlankedTravelBetweenArrows) {
+  auto backend = std::make_shared<TestBackend>();
+  Projector projector(std::make_shared<PlaneSurface>(), backend);
+  ASSERT_TRUE(projector.show_paths(
+      {{{0, 0, 0}, {1, 0, 0}}, {{0, 1, 0}, {1, 1, 0}}},
+      {{0, 0, 1}, {}}, {{255, 0, 0}, 0.25, true}));
+
+  EXPECT_EQ(std::count_if(backend->frame.begin(), backend->frame.end(),
+                          [](const LaserPoint& point) { return point.blank; }),
+            10);
+  ASSERT_EQ(backend->frame.size(), 32u);
+  EXPECT_TRUE(backend->frame[0].blank);
+  EXPECT_FALSE(backend->frame[15].blank);
+  EXPECT_TRUE(backend->frame[16].blank);
+}
+
 TEST(Core, ProjectorOrientationChangesLocalOutput) {
   auto backend = std::make_shared<TestBackend>();
   Projector projector(std::make_shared<PlaneSurface>(), backend);
