@@ -78,11 +78,13 @@ private:
       }
       const auto& t = projector_tf.transform.translation;
       const auto& q = projector_tf.transform.rotation;
+
       projector_->show_path(path, {{t.x, t.y, t.z}, {q.x, q.y, q.z, q.w}},
                             {{static_cast<unsigned char>(color_r_),
                               static_cast<unsigned char>(color_g_),
-                              static_cast<unsigned char>(color_b_)}},
-                            {}, scan_rate_);
+                              static_cast<unsigned char>(color_b_)},
+                            0.05, false}, scan_rate_);
+
       visualization_msgs::msg::Marker marker;
       marker.header.frame_id = projection_frame_;
       marker.header.stamp = now();

@@ -82,10 +82,29 @@ bool Projector::show_path(const std::vector<Point3D>& path, ProjectorPose projec
       const double uy = (tip.y - from.y) / length;
       const Point3D left{tip.x - size * (ux - uy), tip.y - size * (uy + ux), tip.z};
       const Point3D right{tip.x - size * (ux + uy), tip.y - size * (uy - ux), tip.z};
-      append(left, true);
-      append(tip, false);
-      append(right, true);
-      append(tip, false);
+
+      auto append_stroke = [&](const Point3D& start, const Point3D& end) {
+        // Keep the travel to the next stroke blank, then turn the laser on
+        // while interpolating from the stroke start to its end.
+        append(start, true);
+        const double distance = std::hypot(end.x - start.x, end.y - start.y);
+        const int steps = std::max(1, static_cast<int>(std::ceil(
+            distance / options.point_spacing)));
+        for (int step = 0; step <= steps; ++step) {
+          const double t = static_cast<double>(step) / steps;
+          append({start.x + t * (end.x - start.x),
+                  start.y + t * (end.y - start.y), start.z}, false);
+        }
+      };
+
+      // The shaft ends at the tip. Blank that point before moving to the
+      // first arm, and blank the arm start so the complete travel is dark.
+      append(tip, true);
+      append_stroke(left, tip);
+
+      // Repeat the same transition between the two independent arms.
+      append(tip, true);
+      append_stroke(right, tip);
     }
   }
   return backend_->send_frame(last_frame_, scan_rate);

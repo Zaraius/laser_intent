@@ -1,4 +1,5 @@
 #include "laser_projection_core/projector.hpp"
+#include <algorithm>
 #include <gtest/gtest.h>
 
 using namespace laser_projection;
@@ -33,8 +34,32 @@ TEST(Core, OptionalArrowAddsBlankedTravel) {
   Projector projector(std::make_shared<PlaneSurface>(), backend);
   ASSERT_TRUE(projector.show_path({{0, 0, 0}, {1, 0, 0}}, {{0, 0, 1}, {}},
                                   {{255, 0, 0}, 0.25, true}));
-  EXPECT_GT(backend->frame.size(), 5u);
-  EXPECT_TRUE(backend->frame[backend->frame.size() - 4].blank);
+
+  // Initial blank and lit shaft.
+  ASSERT_GE(backend->frame.size(), 14u);
+  EXPECT_TRUE(backend->frame[0].blank);
+  for (size_t i = 1; i <= 5; ++i) EXPECT_FALSE(backend->frame[i].blank);
+
+  // The shaft-to-left-arm travel is blank at both ends.
+  EXPECT_TRUE(backend->frame[6].blank);
+  EXPECT_TRUE(backend->frame[7].blank);
+  EXPECT_FALSE(backend->frame[8].blank);
+
+  // Find the blank transition between the two lit arm strokes.
+  size_t second_transition = 8;
+  while (second_transition < backend->frame.size() &&
+         !backend->frame[second_transition].blank) {
+    ++second_transition;
+  }
+  ASSERT_LT(second_transition + 2, backend->frame.size());
+  EXPECT_TRUE(backend->frame[second_transition].blank);
+  EXPECT_TRUE(backend->frame[second_transition + 1].blank);
+  EXPECT_FALSE(backend->frame[second_transition + 2].blank);
+
+  // No other points are blank: the shaft and both arms are illuminated.
+  EXPECT_EQ(std::count_if(backend->frame.begin(), backend->frame.end(),
+                          [](const LaserPoint& point) { return point.blank; }),
+            5);
 }
 
 TEST(Core, ProjectorOrientationChangesLocalOutput) {
