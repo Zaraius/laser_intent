@@ -17,43 +17,37 @@ instead uses a clean-room, minimal Helios ABI declaration and does not link
 against or copy its Python receiver. The OSC/UI files, preview, optimizer,
 and sender projects are not core dependencies.
 
-## Hardware blink demo
+## Hardware arrow demo
 
-Build once from this package directory:
+Rebuild after code changes:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 cd /home/zaraius/ros2_ws/src/laser_intent
-colcon build --symlink-install
+colcon build --packages-select laser_projection_ros --symlink-install
 ```
 
-In terminal 1, start the Helios node. This assumes your projector TF is
-already being published. The blink point is the origin of `projection_frame`;
-make sure that is a safe surface before enabling the laser.
+Start the node (assuming the projector TF is already being published):
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source /home/zaraius/ros2_ws/src/laser_intent/install/setup.bash
 ros2 run laser_projection_ros laser_projection_node --ros-args \
-  -p backend:=helios -p scan_rate:=2000.0 \
-  -p projection_frame:=map -p projector_frame:=laser_projector
+  -p backend:=helios \
+  -p helios_library:=/home/agx/helios_dac/sdk/cpp/shared_library/libHeliosDacAPI.so.new \
+  -p scan_rate:=2000.0
 ```
 
-In terminal 2, start blinking the stationary spot on/off every 0.5 seconds,
-then send `stop` to turn it off:
+In another terminal, draw one arrow and turn it off:
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source /home/zaraius/ros2_ws/src/laser_intent/install/setup.bash
-ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'blink'}"
-# After confirming it blinks:
-ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'stop'}"
+ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'arrow'}"
+ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'clear'}"
 ```
 
-This tests the current Helios color blanking path: the fixed point alternates
-between configured RGB and zero RGB. It does not drive a separate TTL output;
-the existing Helios adapter does not expose a TTL pin/API. The arrow commands
-remain available with `arrow [count]` and `clear`.
+Use `arrow 2` through `arrow 20` to draw more arrows. The arrow is continuously
+scanned: the Helios frame has lit RGB points for the strokes and zero-RGB points
+for blank travel between them. Green is intentional; the default is
+`color_r:=0 color_g:=255 color_b:=0`. `clear` now sends the same fixed-point
+black frame used by `stop`, at the configured scan rate.
 
 The node publishes `visualization_msgs/Marker` on
 `~/debug_path`. The UDP backend sends one ASCII frame to `127.0.0.1:2345`:

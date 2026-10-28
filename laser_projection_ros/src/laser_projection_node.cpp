@@ -83,7 +83,7 @@ private:
       demo_active_ = false;
       demo_arrow_count_ = 0;
       last_path_.reset();
-      projector_->show_paths({}, {{}, {}});
+      draw_blink_dot(false);
       return;
     }
     if (action == "blink" || action == "stop") {
