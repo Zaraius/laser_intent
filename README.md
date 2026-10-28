@@ -17,58 +17,43 @@ instead uses a clean-room, minimal Helios ABI declaration and does not link
 against or copy its Python receiver. The OSC/UI files, preview, optimizer,
 and sender projects are not core dependencies.
 
-## Build
+## Hardware blink demo
+
+Build once from this package directory:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-cd laser_intent
+cd /home/zaraius/ros2_ws/src/laser_intent
 colcon build --symlink-install
-source install/setup.bash
 ```
 
-## Run the ROS node
+In terminal 1, start the Helios node. This assumes your projector TF is
+already being published. The blink point is the origin of `projection_frame`;
+make sure that is a safe surface before enabling the laser.
 
 ```bash
-ros2 run laser_projection_ros laser_projection_node \
-  --ros-args -p backend:=udp -p path_topic:=/plan \
+source /opt/ros/jazzy/setup.bash
+source /home/zaraius/ros2_ws/src/laser_intent/install/setup.bash
+ros2 run laser_projection_ros laser_projection_node --ros-args \
+  -p backend:=helios -p scan_rate:=2000.0 \
   -p projection_frame:=map -p projector_frame:=laser_projector
 ```
 
-Enable a directional arrowhead with `arrows:=true`; `point_spacing` controls
-the interpolation spacing for the shaft and arrowhead strokes:
+In terminal 2, start blinking the stationary spot on/off every 0.5 seconds,
+then send `stop` to turn it off:
 
 ```bash
-ros2 run laser_projection_ros laser_projection_node \
-  --ros-args -p backend:=helios -p arrows:=true -p point_spacing:=0.02
+source /opt/ros/jazzy/setup.bash
+source /home/zaraius/ros2_ws/src/laser_intent/install/setup.bash
+ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'blink'}"
+# After confirming it blinks:
+ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'stop'}"
 ```
 
-For a standalone demo, publish `arrow` or `arrow <count>` to
-`/laser_command`. The count is limited to 1-20, and
-`demo_arrow_length` controls each arrow's length. `clear` turns the laser off.
-Demo arrows point along +X in `projection_frame`:
-
-```bash
-ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'arrow 3'}"
-ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'clear'}"
-```
-
-For a hardware center-dot test, first publish the projector TF and start the
-node with `-p backend:=helios -p color_r:=255 -p color_g:=255 -p color_b:=255`.
-Then publish a `nav_msgs/msg/Path` containing one point at the floor origin.
-The point remains at normalized laser coordinates `(0, 0)`.
-
-The path topic is runtime state: publish another path to move or replace the
-shape. Publish `std_msgs/msg/ColorRGBA` on `/laser_color` to change RGB
-dynamically; values are normalized from 0.0 to 1.0 and the last path is
-resent automatically:
-
-```bash
-ros2 topic pub --once /laser_color std_msgs/msg/ColorRGBA \
-"{r: 1.0, g: 1.0, b: 1.0, a: 1.0}"
-```
-
-An empty path blacks out the backend. Preloaded shapes are not included yet;
-paths are the one runtime shape primitive in this demo.
+This tests the current Helios color blanking path: the fixed point alternates
+between configured RGB and zero RGB. It does not drive a separate TTL output;
+the existing Helios adapter does not expose a TTL pin/API. The arrow commands
+remain available with `arrow [count]` and `clear`.
 
 The node publishes `visualization_msgs/Marker` on
 `~/debug_path`. The UDP backend sends one ASCII frame to `127.0.0.1:2345`:
