@@ -43,6 +43,18 @@ ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'arrow'}"
 ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'clear'}"
 ```
 
+For direct, uncalibrated mirror positioning, send normalized X/Y coordinates:
+
+```bash
+ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'raw 0.25 -0.5'}"
+```
+
+`raw` bypasses surface projection and calibration and draws a stationary spot
+at the requested position. Its color follows the `color_r`, `color_g`, and
+`color_b` parameters and `/laser_color` topic, just like the arrow demo. Both
+coordinates must be in `[-1, 1]`. This is a raw DAC-field position, not a
+physical floor or wall coordinate.
+
 The demo arrow uses the measured points: tail `(0.07, -0.98)`, junction
 `(0.07, -0.96)`, and head corners `(0.085, -0.962)` and
 `(0.055, -0.962)`, on the `surface_z` plane. Use `arrow 2` through `arrow 20`
@@ -73,8 +85,22 @@ projector.show_path(path_points, {{0.0, 0.0, 1.0}, {}});
 ```
 
 Projector TF supplies the actual mounting position and orientation; no
-projector height or attitude is hard-coded. Calibration is a small
-scale/offset mapping and can be replaced later without changing the ROS node.
+projector height or attitude is hard-coded. The current core calibration is a
+scale/offset mapping. `Calibration2D` is a deliberately unimplemented
+surface-to-mirror calibration scaffold; its methods fail explicitly and it is
+not yet connected to the ROS node.
+
+For bench testing without surface projection or calibration, the core also
+provides `Projector::show_raw_frame`. Its X/Y inputs are normalized mirror
+coordinates in `[-1, 1]`, not physical distances or integer DAC counts. The
+Helios backend maps these endpoints to its 16-bit coordinate range using the
+SDK's `WriteFrameHighResolution` API; older libraries that only export
+`WriteFrame` are not supported. This avoids coordinate wraparound when the
+legacy API is used with network DACs. UDP forwards the normalized values. Raw
+frames must begin and end with blanked points; callers are responsible for
+blanked travel and safe, in-range paths.
+The ROS `raw x y` command sends a repeated point with blanked endpoints to
+render a colored spot.
 
 The Helios backend now refuses frames until initialization succeeds, bounds DAC
 readiness waits to one second, and blacks out on invalid or empty paths. The
@@ -83,9 +109,9 @@ node logs backend initialization failure; it does not claim hardware is ready.
 ## Limitations
 
 V1 renders flat-plane paths and optional directional arrows. The Helios backend
-expects a compatible `libHeliosDacAPI.so` at runtime. Text, mesh surfaces,
-distortion calibration, and lifecycle management are intentionally deferred
-until the demo proves the data path.
+expects a `libHeliosDacAPI.so` that exports `WriteFrameHighResolution` at
+runtime. Text, mesh surfaces, distortion calibration, and lifecycle management
+are intentionally deferred until the demo proves the data path.
 
 start tf2:
 ros2 run tf2_ros static_transform_publisher   0 0 1 0 0 0 map laser_projector

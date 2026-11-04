@@ -1,9 +1,16 @@
 #pragma once
 
 #include "laser_projection_core/projector.hpp"
+#include <cstdint>
 #include <string>
 
 namespace laser_projection {
+
+namespace detail {
+struct HeliosHighResolutionPoint {
+  std::uint16_t x, y, r, g, b;
+};
+}
 
 class UdpBackend final : public LaserBackend {
 public:
@@ -30,12 +37,13 @@ private:
   int device_{0};
   using OpenDevices = int (*)();
   using GetStatus = int (*)(int);
-  using WriteFrame = int (*)(int, int, int, const void*, int);
+  using WriteFrameHighResolution = int (*)(
+      unsigned int, int, std::uint8_t, detail::HeliosHighResolutionPoint*, int);
   using CloseDevices = void (*)();
   OpenDevices open_devices_{nullptr};
   GetStatus get_status_{nullptr};
   bool initialized_{false};
-  WriteFrame write_frame_{nullptr};
+  WriteFrameHighResolution write_frame_high_resolution_{nullptr};
   CloseDevices close_devices_{nullptr};
 };
 

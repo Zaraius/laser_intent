@@ -2,6 +2,7 @@
 #include "laser_projection_core/projector.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -111,8 +112,37 @@ private:
       });
       return;
     }
+    if (action == "raw") {
+      double x, y;
+      std::string extra;
+      if (!(command >> x >> y) || (command >> extra)) {
+        RCLCPP_WARN(get_logger(), "Usage: raw <x> <y>, with each coordinate in [-1, 1]");
+        return;
+      }
+      if (!std::isfinite(x) || !std::isfinite(y) ||
+          x < -1.0 || x > 1.0 || y < -1.0 || y > 1.0) {
+        RCLCPP_WARN(get_logger(), "Raw mirror coordinates must be finite and in [-1, 1]");
+        return;
+      }
+      if (blink_timer_) blink_timer_->cancel();
+      blink_timer_.reset();
+      demo_active_ = false;
+      last_path_.reset();
+      std::vector<laser_projection::LaserPoint> points(9, {x, y, {}, false});
+      points.front().blank = true;
+      points.back().blank = true;
+      const laser_projection::Color color{static_cast<unsigned char>(color_r_),
+                                           static_cast<unsigned char>(color_g_),
+                                           static_cast<unsigned char>(color_b_)};
+      if (!projector_->show_raw_frame(points, color, scan_rate_)) {
+        RCLCPP_ERROR(get_logger(),
+                     "Backend failed to send raw mirror frame; check backend initialization and device readiness");
+      }
+      return;
+    }
     if (action != "arrow") {
-      RCLCPP_WARN(get_logger(), "Use 'blink', 'stop', 'arrow [count]', or 'clear'");
+      RCLCPP_WARN(get_logger(),
+                  "Use 'blink', 'stop', 'raw <x> <y>', 'arrow [count]', or 'clear'");
       return;
     }
     int count = 1;

@@ -26,8 +26,13 @@ ament_export_include_directories(include)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  add_library(fake_helios_dac_api SHARED test/fake_helios_dac_api.cpp)
+  target_compile_features(fake_helios_dac_api PRIVATE cxx_std_17)
   ament_add_gtest(test_projector test/test_projector.cpp)
-  target_link_libraries(test_projector ${PROJECT_NAME})
+  target_compile_definitions(test_projector PRIVATE
+    FAKE_HELIOS_LIBRARY="$<TARGET_FILE:fake_helios_dac_api>")
+  target_link_libraries(test_projector ${PROJECT_NAME} fake_helios_dac_api
+    ${CMAKE_DL_LIBS})
 endif()
 
 ament_package()

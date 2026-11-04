@@ -45,6 +45,21 @@ struct Calibration {
   double offset_y{};
 };
 
+struct CalibrationPoint2D {
+  Point2D surface;
+  Point2D mirror;
+};
+
+// Placeholder for a 2D surface-to-normalized-mirror calibration.
+class Calibration2D {
+public:
+  void fit(const std::vector<CalibrationPoint2D>& correspondences);
+  Point2D surface_to_mirror(Point2D point) const;
+private:
+  double homography_[9]{};
+  bool fitted_{false};
+};
+
 struct PathOptions {
   Color color{0, 255, 0};
   double point_spacing{0.05};
@@ -62,6 +77,8 @@ public:
   bool show_paths(const std::vector<std::vector<Point3D>>& paths,
                   ProjectorPose projector_pose, PathOptions options = {},
                   double scan_rate = 30000.0);
+  // Bypasses surface projection and calibration; x/y must be in [-1, 1].
+  bool show_raw_frame(const std::vector<LaserPoint>& points, Color color, double scan_rate = 15000.0);
   const std::vector<LaserPoint>& last_frame() const { return last_frame_; }
 private:
   std::shared_ptr<const ProjectionSurface> surface_;

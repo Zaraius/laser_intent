@@ -1,6 +1,7 @@
 #include "laser_projection_core/projector.hpp"
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <utility>
 
 namespace laser_projection {
@@ -29,6 +30,14 @@ std::optional<Point3D> PlaneSurface::intersect(const Ray& ray) const {
 Projector::Projector(std::shared_ptr<const ProjectionSurface> surface,
                      std::shared_ptr<LaserBackend> backend, Calibration calibration)
     : surface_(std::move(surface)), backend_(std::move(backend)), calibration_(calibration) {}
+
+void Calibration2D::fit(const std::vector<CalibrationPoint2D>&) {
+  throw std::logic_error("2D calibration is not implemented");
+}
+
+Point2D Calibration2D::surface_to_mirror(Point2D) const {
+  throw std::logic_error("2D calibration is not implemented");
+}
 
 bool Projector::initialize() { return backend_->initialize(); }
 
@@ -139,6 +148,29 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
     }
   }
   append_blank_travel(frame_end, projected_paths.front().front());
+  return backend_->send_frame(last_frame_, scan_rate);
+}
+
+bool Projector::show_raw_frame(const std::vector<LaserPoint>& points, Color color,
+                               double scan_rate) {
+  last_frame_.clear();
+  const bool valid_points = !points.empty() &&
+      points.front().blank && points.back().blank &&
+      std::all_of(points.begin(), points.end(), [](const LaserPoint& point) {
+        return std::isfinite(point.x) && std::isfinite(point.y) &&
+               point.x >= -1.0 && point.x <= 1.0 &&
+               point.y >= -1.0 && point.y <= 1.0;
+      });
+  if (!valid_points || !std::isfinite(scan_rate) || scan_rate <= 0.0) {
+    backend_->blackout();
+    return false;
+  }
+
+  last_frame_.reserve(points.size());
+  for (auto point : points) {
+    point.color = point.blank ? Color{0, 0, 0} : color;
+    last_frame_.push_back(point);
+  }
   return backend_->send_frame(last_frame_, scan_rate);
 }
 

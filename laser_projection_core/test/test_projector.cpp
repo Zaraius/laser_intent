@@ -1,15 +1,22 @@
 #include "laser_projection_core/projector.hpp"
+#include "laser_projection_core/backends.hpp"
 #include <algorithm>
+#include <cstdint>
 #include <gtest/gtest.h>
+#include <stdexcept>
 
 using namespace laser_projection;
+
+extern "C" int FakeHeliosFrameSize();
+extern "C" std::uint16_t FakeHeliosFrameValue(int index, int channel);
 
 class TestBackend final : public LaserBackend {
 public:
   bool initialize() override { return true; }
   bool send_frame(const std::vector<LaserPoint>& p, double) override { frame = p; return true; }
-  void blackout() override {}
+  void blackout() override { ++blackout_count; }
   std::vector<LaserPoint> frame;
+  int blackout_count{};
 };
 
 TEST(Core, PlaneIntersectionAndHeight) {
@@ -109,4 +116,80 @@ TEST(Core, SinglePointProducesLitSamples) {
   ASSERT_TRUE(projector.show_path({{0, 0, 0}}, {{0, 0, 1}, {}}));
   EXPECT_EQ(backend->frame.size(), 9u);
   EXPECT_FALSE(backend->frame.back().blank);
+}
+
+TEST(Core, RawFrameBypassesProjectionAndCalibration) {
+  auto backend = std::make_shared<TestBackend>();
+  Projector projector(std::make_shared<PlaneSurface>(), backend);
+  const std::vector<LaserPoint> points{
+      {-0.75, 0.5, {255, 0, 0}, true},
+      {0.25, -0.5, {0, 255, 0}, false},
+      {0.9, 0.8, {0, 0, 255}, true}};
+
+  const Color color{12, 34, 56};
+  ASSERT_TRUE(projector.show_raw_frame(points, color));
+  ASSERT_EQ(backend->frame.size(), points.size());
+  EXPECT_DOUBLE_EQ(backend->frame[1].x, 0.25);
+  EXPECT_DOUBLE_EQ(backend->frame[1].y, -0.5);
+  EXPECT_FALSE(backend->frame[1].blank);
+  EXPECT_EQ(backend->frame[1].color.r, color.r);
+  EXPECT_EQ(backend->frame[1].color.g, color.g);
+  EXPECT_EQ(backend->frame[1].color.b, color.b);
+  EXPECT_TRUE(backend->frame.front().blank);
+  EXPECT_TRUE(backend->frame.back().blank);
+  EXPECT_EQ(backend->frame.front().color.r, 0);
+  EXPECT_EQ(backend->frame.front().color.g, 0);
+  EXPECT_EQ(backend->frame.front().color.b, 0);
+}
+
+TEST(Core, RawFrameRejectsOutOfRangeCoordinates) {
+  auto backend = std::make_shared<TestBackend>();
+  Projector projector(std::make_shared<PlaneSurface>(), backend);
+  const std::vector<LaserPoint> points{
+      {0.0, 0.0, {0, 0, 0}, true},
+      {1.01, 0.0, {255, 255, 255}, false},
+      {0.0, 0.0, {0, 0, 0}, true}};
+
+  EXPECT_FALSE(projector.show_raw_frame(points, {255, 255, 255}));
+  EXPECT_EQ(backend->blackout_count, 1);
+  EXPECT_TRUE(backend->frame.empty());
+}
+
+TEST(Helios, RawCoordinatesUseHighResolutionFieldWithoutWrapping) {
+  HeliosBackend backend(FAKE_HELIOS_LIBRARY);
+  ASSERT_TRUE(backend.initialize());
+  const std::vector<LaserPoint> points{
+      {-1.0, -1.0, {}, true},
+      {0.0, 0.0, {255, 128, 64}, false},
+      {0.0, 0.5, {255, 128, 64}, false},
+      {0.0, -0.3, {255, 128, 64}, false},
+      {0.3, 0.2, {255, 128, 64}, false},
+      {0.4, 0.2, {255, 128, 64}, false},
+      {0.49, 0.2, {255, 128, 64}, false},
+      {1.0, 1.0, {}, true}};
+
+  ASSERT_TRUE(backend.send_frame(points, 15000.0));
+  ASSERT_EQ(FakeHeliosFrameSize(), static_cast<int>(points.size()));
+  EXPECT_EQ(FakeHeliosFrameValue(0, 0), 0);
+  EXPECT_EQ(FakeHeliosFrameValue(0, 1), 0);
+  EXPECT_EQ(FakeHeliosFrameValue(1, 0), 32768);
+  EXPECT_EQ(FakeHeliosFrameValue(1, 1), 32768);
+  EXPECT_EQ(FakeHeliosFrameValue(2, 1), 49151);
+  EXPECT_EQ(FakeHeliosFrameValue(3, 1), 22937);
+  EXPECT_LT(FakeHeliosFrameValue(3, 1), FakeHeliosFrameValue(2, 1));
+  EXPECT_NE(FakeHeliosFrameValue(3, 1), FakeHeliosFrameValue(4, 1));
+  EXPECT_LT(FakeHeliosFrameValue(4, 0), FakeHeliosFrameValue(5, 0));
+  EXPECT_LT(FakeHeliosFrameValue(5, 0), FakeHeliosFrameValue(6, 0));
+  EXPECT_EQ(FakeHeliosFrameValue(1, 2), 65535);
+  EXPECT_EQ(FakeHeliosFrameValue(1, 3), 32896);
+  EXPECT_EQ(FakeHeliosFrameValue(1, 4), 16448);
+  EXPECT_EQ(FakeHeliosFrameValue(7, 0), 65535);
+  EXPECT_EQ(FakeHeliosFrameValue(7, 1), 65535);
+  EXPECT_EQ(FakeHeliosFrameValue(7, 2), 0);
+}
+
+TEST(Core, Calibration2DPlaceholderFailsExplicitly) {
+  Calibration2D calibration;
+  EXPECT_THROW(calibration.fit({}), std::logic_error);
+  EXPECT_THROW(calibration.surface_to_mirror({0.0, 0.0}), std::logic_error);
 }
