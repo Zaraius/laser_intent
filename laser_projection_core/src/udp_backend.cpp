@@ -3,6 +3,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <sstream>
+#include <cstdio>
 
 namespace laser_projection {
 
@@ -11,6 +12,7 @@ UdpBackend::UdpBackend(std::string host, unsigned short port)
 
 bool UdpBackend::initialize() {
   socket_ = socket(AF_INET, SOCK_DGRAM, 0);
+  if (socket_ < 0) std::perror("[UdpBackend] socket failed");
   return socket_ >= 0;
 }
 
@@ -25,11 +27,31 @@ bool UdpBackend::send_frame(const std::vector<LaserPoint>& points, double scan_r
   sockaddr_in address{};
   address.sin_family = AF_INET;
   address.sin_port = htons(port_);
-  if (inet_pton(AF_INET, host_.c_str(), &address.sin_addr) != 1) return false;
+  if (inet_pton(AF_INET, host_.c_str(), &address.sin_addr) != 1) {
+    std::fprintf(stderr, "[UdpBackend] Invalid IPv4 address: %s\n", host_.c_str());
+    return false;
+  }
   const auto data = message.str();
-  return sendto(socket_, data.data(), data.size(), 0,
-                reinterpret_cast<sockaddr*>(&address), sizeof(address)) ==
-         static_cast<ssize_t>(data.size());
+  constexpr std::size_t max_udp_payload = 65507;
+  if (data.size() > max_udp_payload) {
+    std::fprintf(stderr,
+                 "[UdpBackend] Frame is too large for one UDP datagram "
+                 "(%zu bytes, maximum %zu)\n",
+                 data.size(), max_udp_payload);
+    return false;
+  }
+  const auto sent = sendto(socket_, data.data(), data.size(), 0,
+                           reinterpret_cast<sockaddr*>(&address), sizeof(address));
+  if (sent < 0) {
+    std::perror("[UdpBackend] sendto failed");
+    return false;
+  }
+  if (sent != static_cast<ssize_t>(data.size())) {
+    std::fprintf(stderr, "[UdpBackend] Incomplete UDP frame sent (%zd of %zu bytes)\n",
+                 sent, data.size());
+    return false;
+  }
+  return true;
 }
 
 void UdpBackend::blackout() {

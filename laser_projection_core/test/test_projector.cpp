@@ -166,6 +166,8 @@ TEST(Helios, RawCoordinatesUseHighResolutionFieldWithoutWrapping) {
       {0.3, 0.2, {255, 128, 64}, false},
       {0.4, 0.2, {255, 128, 64}, false},
       {0.49, 0.2, {255, 128, 64}, false},
+      {0.0, 0.0, {99, 99, 99}, false},
+      {0.0, 0.0, {100, 100, 100}, false},
       {1.0, 1.0, {}, true}};
 
   ASSERT_TRUE(backend.send_frame(points, 15000.0));
@@ -183,9 +185,12 @@ TEST(Helios, RawCoordinatesUseHighResolutionFieldWithoutWrapping) {
   EXPECT_EQ(FakeHeliosFrameValue(1, 2), 65535);
   EXPECT_EQ(FakeHeliosFrameValue(1, 3), 32896);
   EXPECT_EQ(FakeHeliosFrameValue(1, 4), 16448);
-  EXPECT_EQ(FakeHeliosFrameValue(7, 0), 65535);
-  EXPECT_EQ(FakeHeliosFrameValue(7, 1), 65535);
-  EXPECT_EQ(FakeHeliosFrameValue(7, 2), 0);
+  EXPECT_EQ(FakeHeliosFrameValue(7, 2), 25443);
+  EXPECT_EQ(FakeHeliosFrameValue(8, 2), 25700);
+  EXPECT_LT(FakeHeliosFrameValue(7, 2), FakeHeliosFrameValue(8, 2));
+  EXPECT_EQ(FakeHeliosFrameValue(9, 0), 65535);
+  EXPECT_EQ(FakeHeliosFrameValue(9, 1), 65535);
+  EXPECT_EQ(FakeHeliosFrameValue(9, 2), 0);
 }
 
 TEST(Core, Calibration2DPlaceholderFailsExplicitly) {

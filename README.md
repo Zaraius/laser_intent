@@ -127,3 +127,77 @@ ros2 topic pub --once /plan nav_msgs/msg/Path "{header: {frame_id: map}, poses: 
 
 draw a single point
 ros2 topic pub --once /plan nav_msgs/msg/Path "{header: {frame_id: map}, poses: [{header: {frame_id: map}, pose: {position: {x: 0.07, y: -0.95, z: 0.00}, orientation: {w: 1.0}}}]}"
+
+ ros2 run laser_projection_ros laser_projection_node --ros-args -p backend:=helios -p helios_library:=/home/agx/helios_dac/sdk/cpp/shared_library/libHeliosDacAPI.so.new -p scan_rate:=15000.0 -p point_spacing:=0.001 -p color_r:=0 -p color_g:=100 -p color_b:=0
+
+ ## SVG to Helios
+
+ The ROS node accepts `svg <path>` on `/laser_command` and sends the rendered
+ raw-coordinate frame through its configured backend. For Helios, start the
+ same node used for the arrow demo:
+
+ ```bash
+ source /opt/ros/jazzy/setup.bash
+ cd /home/agx/ros2_jazzy
+ colcon build --packages-up-to laser_projection_ros --symlink-install
+ source install/setup.bash
+ ros2 run laser_projection_ros laser_projection_node --ros-args \
+   -p backend:=helios \
+   -p helios_library:=/home/agx/helios_dac/sdk/cpp/shared_library/libHeliosDacAPI.so.new \
+   -p scan_rate:=15000.0 \
+   -p svg_bottom_left_x:=-0.8 -p svg_bottom_left_y:=-0.8 \
+   -p svg_top_right_x:=0.8 -p svg_top_right_y:=0.8 \
+   -p svg_scale_x:=1.0 -p svg_scale_y:=1.0 \
+   -p svg_rotation_degrees:=0.0
+ ```
+
+ In another terminal, send an SVG. This draws the bundled face sample:
+
+ ```bash
+ source /opt/ros/jazzy/setup.bash
+ ros2 topic pub --once /laser_command std_msgs/msg/String \
+   "{data: 'svg /home/agx/ros2_jazzy/src/laser_intent/test_images/face.svg'}"
+ ```
+
+ SVG rendering uses raw mirror coordinates and does not require the projector
+ TF. It uses the node's already-initialized Helios backend directly; `svg`
+ does not go through the standalone UDP sender. The requested box must be
+ ordered and within `[-1, 1]`. Artwork preserves aspect ratio, is centered in
+ the box, and SVG top/bottom map to the box's top/bottom. The X/Y scale factors
+ are applied around the box center. If scaling would exceed `[-1, 1]`, the
+ whole image is uniformly reduced until it fits.
+
+ Parameters `svg_bottom_left_x/y`, `svg_top_right_x/y`, `svg_scale_x/y`,
+ `svg_rotation_degrees`, `svg_hatch_spacing`, `svg_point_spacing`, and
+ `svg_max_points` control placement and rendering (`svg_max_points` defaults to
+ `500000`). Positive rotation is counterclockwise, around the image center.
+ Parameters are read for each `svg` command, so they can be adjusted while the
+ node is running, then the SVG command can be sent again. For example:
+
+ ```bash
+ ros2 param set /laser_projection_node svg_scale_x 0.7
+ ros2 param set /laser_projection_node svg_scale_y 0.7
+ ros2 param set /laser_projection_node svg_rotation_degrees 15.0
+ ros2 topic pub --once /laser_command std_msgs/msg/String \
+   "{data: 'svg /home/agx/ros2_jazzy/src/laser_intent/test_images/face.svg'}"
+ ```
+
+ For an image
+ with empty or spaced paths, its colors come from the SVG; opacity is ignored.
+ `clear` turns the beam off. Observe the laser enclosure, interlocks, and beam
+ stop precautions before sending any drawing.
+
+ The renderer supports SVG paths (`M/L/H/V/C/S/Q/T/A/Z`), lines, polylines,
+ polygons, rectangles, circles, ellipses, nested groups, common transforms,
+ solid hex/RGB colors and common color names, and fill/stroke styling. Filled
+ shapes are rendered as horizontal scan-line hatches; tune their spacing in raw
+ units with `svg_hatch_spacing` (default `0.1`). `svg_point_spacing` controls
+ the maximum distance between output points (default `0.05`).
+ Stroke width is treated as a centerline, SVG opacity is ignored with a warning,
+ and unsupported SVG elements are reported and skipped. Gradients, text,
+ clipping, and embedded images are not rendered; clipping and masks produce
+ warnings and are not applied. The core library also provides a standalone UDP
+ sender (`ros2 run laser_projection_core laser_svg_sender --help`) for use with
+ the existing `LASER_FRAME` receiver; use the ROS command above to send to
+ Helios through the laser node. Invalid settings, oversized frames, and
+ malformed SVGs are reported instead of silently clipped.

@@ -1,12 +1,15 @@
 #include "laser_projection_core/backends.hpp"
 #include "laser_projection_core/projector.hpp"
+#include "laser_projection_core/svg.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <exception>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sstream>
+#include <string>
 #include <std_msgs/msg/color_rgba.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -26,6 +29,16 @@ public:
     color_b_ = declare_parameter("color_b", 0);
     color_topic_ = declare_parameter("color_topic", std::string("/laser_color"));
     point_spacing_ = declare_parameter("point_spacing", 0.05);
+    declare_parameter("svg_bottom_left_x", -1.0);
+    declare_parameter("svg_bottom_left_y", -1.0);
+    declare_parameter("svg_top_right_x", 1.0);
+    declare_parameter("svg_top_right_y", 1.0);
+    declare_parameter("svg_scale_x", 1.0);
+    declare_parameter("svg_scale_y", 1.0);
+    declare_parameter("svg_rotation_degrees", 0.0);
+    declare_parameter("svg_hatch_spacing", 0.1);
+    declare_parameter("svg_point_spacing", 0.05);
+    declare_parameter("svg_max_points", 500000);
     arrows_ = declare_parameter("arrows", false);
     scan_rate_ = declare_parameter("scan_rate", 20000.0);
     surface_z_ = declare_parameter("surface_z", 0.0);
@@ -71,6 +84,63 @@ private:
     std::istringstream command(message->data);
     std::string action;
     command >> action;
+    if (action == "svg") {
+      std::string svg_path;
+      std::getline(command >> std::ws, svg_path);
+      if (svg_path.size() >= 2 &&
+          ((svg_path.front() == '"' && svg_path.back() == '"') ||
+           (svg_path.front() == '\'' && svg_path.back() == '\'')))
+        svg_path = svg_path.substr(1, svg_path.size() - 2);
+      if (svg_path.empty()) {
+        RCLCPP_WARN(get_logger(), "Usage: svg <path-to-file.svg>");
+        return;
+      }
+
+      laser_projection::SvgRenderOptions options;
+      options.bottom_left = {
+          get_parameter("svg_bottom_left_x").as_double(),
+          get_parameter("svg_bottom_left_y").as_double()};
+      options.top_right = {
+          get_parameter("svg_top_right_x").as_double(),
+          get_parameter("svg_top_right_y").as_double()};
+      options.scale_x = get_parameter("svg_scale_x").as_double();
+      options.scale_y = get_parameter("svg_scale_y").as_double();
+      options.rotation_degrees =
+          get_parameter("svg_rotation_degrees").as_double();
+      options.hatch_spacing =
+          get_parameter("svg_hatch_spacing").as_double();
+      options.point_spacing =
+          get_parameter("svg_point_spacing").as_double();
+      const auto max_points = get_parameter("svg_max_points").as_int();
+      if (max_points < 2) {
+        RCLCPP_ERROR(get_logger(), "svg_max_points must be at least 2");
+        return;
+      }
+      options.max_points = static_cast<std::size_t>(max_points);
+
+      try {
+        auto rendered = laser_projection::render_svg_file(svg_path, options);
+        for (const auto& warning : rendered.warnings)
+          RCLCPP_WARN(get_logger(), "SVG %s: %s", svg_path.c_str(), warning.c_str());
+        if (blink_timer_) blink_timer_->cancel();
+        blink_timer_.reset();
+        demo_active_ = false;
+        demo_arrow_count_ = 0;
+        last_path_.reset();
+        if (!projector_->show_raw_frame(rendered.points, scan_rate_)) {
+          RCLCPP_ERROR(get_logger(),
+                       "Failed to send SVG '%s'; check backend initialization, frame size, and device readiness",
+                       svg_path.c_str());
+          return;
+        }
+        RCLCPP_INFO(get_logger(), "Displayed SVG '%s' (%zu laser points)",
+                    svg_path.c_str(), rendered.points.size());
+      } catch (const std::exception& error) {
+        RCLCPP_ERROR(get_logger(), "Could not render SVG '%s': %s",
+                     svg_path.c_str(), error.what());
+      }
+      return;
+    }
     if (action == "clear") {
       std::string extra;
       if (command >> extra) {
@@ -142,7 +212,7 @@ private:
     }
     if (action != "arrow") {
       RCLCPP_WARN(get_logger(),
-                  "Use 'blink', 'stop', 'raw <x> <y>', 'arrow [count]', or 'clear'");
+                  "Use 'blink', 'stop', 'raw <x> <y>', 'arrow [count]', 'svg <path>', or 'clear'");
       return;
     }
     int count = 1;

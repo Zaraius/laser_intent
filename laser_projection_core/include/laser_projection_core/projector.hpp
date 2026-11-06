@@ -79,6 +79,8 @@ public:
                   double scan_rate = 30000.0);
   // Bypasses surface projection and calibration; x/y must be in [-1, 1].
   bool show_raw_frame(const std::vector<LaserPoint>& points, Color color, double scan_rate = 15000.0);
+  // Sends raw points with their individual colors; x/y must be in [-1, 1].
+  bool show_raw_frame(const std::vector<LaserPoint>& points, double scan_rate = 15000.0);
   const std::vector<LaserPoint>& last_frame() const { return last_frame_; }
 private:
   std::shared_ptr<const ProjectionSurface> surface_;

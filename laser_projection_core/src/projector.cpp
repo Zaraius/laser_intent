@@ -153,6 +153,13 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
 
 bool Projector::show_raw_frame(const std::vector<LaserPoint>& points, Color color,
                                double scan_rate) {
+  auto colored_points = points;
+  for (auto& point : colored_points)
+    point.color = point.blank ? Color{0, 0, 0} : color;
+  return show_raw_frame(colored_points, scan_rate);
+}
+
+bool Projector::show_raw_frame(const std::vector<LaserPoint>& points, double scan_rate) {
   last_frame_.clear();
   const bool valid_points = !points.empty() &&
       points.front().blank && points.back().blank &&
@@ -166,11 +173,9 @@ bool Projector::show_raw_frame(const std::vector<LaserPoint>& points, Color colo
     return false;
   }
 
-  last_frame_.reserve(points.size());
-  for (auto point : points) {
-    point.color = point.blank ? Color{0, 0, 0} : color;
-    last_frame_.push_back(point);
-  }
+  last_frame_ = points;
+  for (auto& point : last_frame_)
+    if (point.blank) point.color = {0, 0, 0};
   return backend_->send_frame(last_frame_, scan_rate);
 }
 
