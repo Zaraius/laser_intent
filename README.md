@@ -49,6 +49,18 @@ For direct, uncalibrated mirror positioning, send normalized X/Y coordinates:
 ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'raw 0.25 -0.5'}"
 ```
 
+For example, send a stationary spot to the lower-left normalized mirror
+coordinate with:
+
+```bash
+ros2 topic pub --once /laser_command std_msgs/msg/String "{data: 'raw -1 -1'}"
+```
+
+This tests the raw DAC field only; it does not test surface calibration. Start
+at `raw 0 0`, then move outward in small steps (for example `raw -0.25 -0.25`)
+before trying an edge. Use a safe beam stop/enclosure and the projector's normal
+hardware safety controls.
+
 `raw` bypasses surface projection and calibration and draws a stationary spot
 at the requested position. Its color follows the `color_r`, `color_g`, and
 `color_b` parameters and `/laser_color` topic, just like the arrow demo. Both
@@ -85,10 +97,65 @@ projector.show_path(path_points, {{0.0, 0.0, 1.0}, {}});
 ```
 
 Projector TF supplies the actual mounting position and orientation; no
-projector height or attitude is hard-coded. The current core calibration is a
-scale/offset mapping. `Calibration2D` is a deliberately unimplemented
-surface-to-mirror calibration scaffold; its methods fail explicitly and it is
-not yet connected to the ROS node.
+projector height or attitude is hard-coded. The default core calibration is a
+scale/offset mapping.
+
+## Four-corner calibration
+
+The node can map a planar path directly into the laser's normalized mirror
+field using four measured floor corners. Measure each point's signed X/Y
+offset in meters from the origin of `projection_frame`, along that frame's X
+and Y axes. For `base_link`, X is forward and Y is left. Order the pairs as the
+physical rectangle corners `(x_min,y_min)`, `(x_max,y_min)`, `(x_max,y_max)`,
+`(x_min,y_max)`; use the actual measured values if the rectangle is skewed.
+For a projector mounted on the robot, use `projection_frame: base_link`; Nav2
+must publish TF so its path can be transformed into that frame. This calibrated
+path mode does not require a `projector_frame` TF because the four measured
+points capture the scanner-to-surface mapping.
+
+Put the actual measured coordinates in a ROS parameter file and load it with
+`--params-file`:
+
+```yaml
+laser_projection_node:
+  ros__parameters:
+    projection_frame: base_link
+    # Replace these example meter coordinates with your measured corners.
+    calibration_surface_corners: [-0.5, -0.4, 0.5, -0.4, 0.5, 0.4, -0.5, 0.4]
+    # Optional inset in normalized mirror coordinates; default is [-1,-1,1,1].
+    calibration_mirror_bounds: [-0.7, -0.7, 0.7, 0.7]
+```
+
+Start the node with that file (then add the usual backend parameters):
+
+```bash
+ros2 run laser_projection_ros laser_projection_node --ros-args \
+  --params-file /path/to/calibration.yaml
+```
+
+The flat list contains four `(x,y)` pairs in the order above. The optional
+`calibration_mirror_bounds` list is `[min_x,min_y,max_x,max_y]` and must stay
+inside `[-1,1]`; using `[-0.7,-0.7,0.7,0.7]` maps the measured rectangle to a
+smaller portion of the scanner field. Paths mapping outside the chosen bounds
+are blanked. Leave a little margin inside the measured physical boundary when
+choosing this range. If `calibration_surface_corners` is omitted or empty, the
+node keeps using its existing projector-TF ray projection and scale/offset
+calibration. The four-corner calibration is a projective homography, so it
+corrects perspective on one plane; it does not calibrate changing floor height,
+robot pitch/roll, or non-planar surfaces.
+
+To collect measurements, park the robot on a level surface, mark the desired
+rectangle on the floor, and measure each corner's X/Y offset from the
+`base_link` origin (typically the robot footprint center), not just the edge
+lengths. Check each sign against the robot axes: forward is positive X and left
+is positive Y. Record the four signed pairs in meters in the order above. Run
+the node with this file, then publish a short test path through the center and
+near each corner in the same frame; verify the projected spots align and that a
+point just beyond the calibrated boundary blanks. Re-measure if the projector
+mount moves or the robot's floor plane changes. Measuring the laser's offset
+from the robot is useful for TF accuracy, but the four-corner calibration
+captures the scanner-to-floor mapping directly; with `base_link` calibration,
+Nav2 still needs a correct TF into `base_link` for the planned path.
 
 For bench testing without surface projection or calibration, the core also
 provides `Projector::show_raw_frame`. Its X/Y inputs are normalized mirror

@@ -155,6 +155,72 @@ TEST(Core, RawFrameRejectsOutOfRangeCoordinates) {
   EXPECT_TRUE(backend->frame.empty());
 }
 
+TEST(Core, FourCornerCalibrationMapsMeasuredCornersToMirrorField) {
+  Calibration2D calibration;
+  calibration.fit({{{0.2, 0.3}, {-1.0, -1.0}},
+                   {{2.4, 0.1}, {1.0, -1.0}},
+                   {{2.1, 1.8}, {1.0, 1.0}},
+                   {{-0.1, 1.7}, {-1.0, 1.0}}});
+  const std::vector<Point2D> expected{{-1.0, -1.0}, {1.0, -1.0},
+                                      {1.0, 1.0}, {-1.0, 1.0}};
+  const std::vector<Point2D> measured{{0.2, 0.3}, {2.4, 0.1},
+                                      {2.1, 1.8}, {-0.1, 1.7}};
+  for (std::size_t i = 0; i < measured.size(); ++i) {
+    const auto mapped = calibration.map(measured[i]);
+    ASSERT_TRUE(mapped);
+    EXPECT_NEAR(mapped->x, expected[i].x, 1e-9);
+    EXPECT_NEAR(mapped->y, expected[i].y, 1e-9);
+  }
+}
+
+TEST(Core, FourCornerCalibrationSupportsInsetMirrorRange) {
+  Calibration2D calibration;
+  calibration.fit({{{0, 0}, {-0.7, -0.6}}, {{2, 0}, {0.7, -0.6}},
+                   {{2, 1}, {0.7, 0.6}}, {{0, 1}, {-0.7, 0.6}}});
+  const auto mapped = calibration.map({1, 0.5});
+  ASSERT_TRUE(mapped);
+  EXPECT_NEAR(mapped->x, 0.0, 1e-9);
+  EXPECT_NEAR(mapped->y, 0.0, 1e-9);
+  EXPECT_TRUE(calibration.contains({0.7, 0.6}));
+  EXPECT_FALSE(calibration.contains({0.8, 0.0}));
+
+  auto backend = std::make_shared<TestBackend>();
+  Projector projector(std::make_shared<PlaneSurface>(), backend, {}, calibration);
+  EXPECT_FALSE(projector.show_path({{0, 0.5, 0}, {2.1, 0.5, 0}}, {}));
+  EXPECT_TRUE(backend->frame.empty());
+}
+
+TEST(Core, ProjectorUsesFourCornerCalibrationWithoutProjectorPose) {
+  auto backend = std::make_shared<TestBackend>();
+  Calibration2D calibration;
+  calibration.fit({{{0, 0}, {-1, -1}}, {{2, 0}, {1, -1}},
+                   {{2, 1}, {1, 1}}, {{0, 1}, {-1, 1}}});
+  Projector projector(std::make_shared<PlaneSurface>(), backend, {}, calibration);
+  ASSERT_TRUE(projector.show_path({{0, 0, 0}, {2, 0, 0}}, {}));
+  ASSERT_FALSE(backend->frame.empty());
+  EXPECT_NEAR(backend->frame.front().x, -1.0, 1e-9);
+  EXPECT_NEAR(backend->frame.front().y, -1.0, 1e-9);
+  EXPECT_NEAR(backend->frame[1].x, -1.0, 1e-9);
+  EXPECT_NEAR(backend->frame.back().x, -1.0, 1e-9);
+}
+
+TEST(Core, FourCornerCalibrationRejectsPathOutsideMirrorField) {
+  auto backend = std::make_shared<TestBackend>();
+  Calibration2D calibration;
+  calibration.fit({{{0, 0}, {-1, -1}}, {{2, 0}, {1, -1}},
+                   {{2, 1}, {1, 1}}, {{0, 1}, {-1, 1}}});
+  Projector projector(std::make_shared<PlaneSurface>(), backend, {}, calibration);
+  EXPECT_FALSE(projector.show_path({{0, 0.5, 0}, {2.1, 0.5, 0}}, {}));
+  EXPECT_TRUE(backend->frame.empty());
+}
+
+TEST(Core, FourCornerCalibrationRejectsDegenerateCorners) {
+  Calibration2D calibration;
+  EXPECT_THROW(calibration.fit({{{0, 0}, {-1, -1}}, {{1, 0}, {1, -1}},
+                                {{2, 0}, {1, 1}}, {{3, 0}, {-1, 1}}}),
+               std::invalid_argument);
+}
+
 TEST(Helios, RawCoordinatesUseHighResolutionFieldWithoutWrapping) {
   HeliosBackend backend(FAKE_HELIOS_LIBRARY);
   ASSERT_TRUE(backend.initialize());

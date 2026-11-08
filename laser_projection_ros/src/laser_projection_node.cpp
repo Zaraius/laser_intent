@@ -3,6 +3,7 @@
 #include "laser_projection_core/svg.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cmath>
 #include <exception>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -12,6 +13,9 @@
 #include <string>
 #include <std_msgs/msg/color_rgba.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <stdexcept>
+#include <utility>
+#include <vector>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -43,6 +47,38 @@ public:
     scan_rate_ = declare_parameter("scan_rate", 20000.0);
     surface_z_ = declare_parameter("surface_z", 0.0);
     backend_name_ = declare_parameter("backend", std::string("udp"));
+    const auto corner_values = declare_parameter<std::vector<double>>(
+        "calibration_surface_corners", std::vector<double>{});
+    const auto mirror_bounds = declare_parameter<std::vector<double>>(
+        "calibration_mirror_bounds", std::vector<double>{-1.0, -1.0, 1.0, 1.0});
+    if (mirror_bounds.size() != 4 ||
+        !std::all_of(mirror_bounds.begin(), mirror_bounds.end(), [](double value) {
+          return std::isfinite(value) && value >= -1.0 && value <= 1.0;
+        }) || mirror_bounds[0] >= mirror_bounds[2] ||
+        mirror_bounds[1] >= mirror_bounds[3])
+      throw std::invalid_argument(
+          "calibration_mirror_bounds must be [min_x,min_y,max_x,max_y] "
+          "with finite, increasing coordinates in [-1,1]");
+    laser_projection::Calibration2D surface_calibration;
+    if (!corner_values.empty()) {
+      if (corner_values.size() != 8)
+        throw std::invalid_argument(
+            "calibration_surface_corners must contain four ordered x,y pairs");
+      const std::vector<laser_projection::Point2D> mirror_corners{
+          {mirror_bounds[0], mirror_bounds[1]},
+          {mirror_bounds[2], mirror_bounds[1]},
+          {mirror_bounds[2], mirror_bounds[3]},
+          {mirror_bounds[0], mirror_bounds[3]}};
+      std::vector<laser_projection::CalibrationPoint2D> correspondences;
+      correspondences.reserve(4);
+      for (std::size_t i = 0; i < 4; ++i)
+        correspondences.push_back({{corner_values[2 * i], corner_values[2 * i + 1]},
+                                   mirror_corners[i]});
+      surface_calibration.fit(correspondences);
+      RCLCPP_INFO(get_logger(),
+                  "Using four-corner calibration in projection frame '%s'",
+                  projection_frame_.c_str());
+    }
     std::shared_ptr<laser_projection::LaserBackend> backend;
     if (backend_name_ == "helios")
       backend = std::make_shared<laser_projection::HeliosBackend>(
@@ -52,7 +88,8 @@ public:
           declare_parameter("udp_host", std::string("127.0.0.1")),
           declare_parameter("udp_port", 2345));
     projector_ = std::make_unique<laser_projection::Projector>(
-        std::make_shared<laser_projection::PlaneSurface>(surface_z_), backend);
+        std::make_shared<laser_projection::PlaneSurface>(surface_z_), backend,
+        laser_projection::Calibration{}, std::move(surface_calibration));
     if (!projector_->initialize()) {
       RCLCPP_ERROR(get_logger(), "Laser backend failed to initialize");
     } else {
@@ -311,8 +348,14 @@ private:
       blink_timer_.reset();
       demo_active_ = false;
       const auto stamp = message->header.stamp;
-      auto projector_tf = tf_buffer_.lookupTransform(
-          projection_frame_, projector_frame_, stamp, tf2::durationFromSec(0.05));
+      laser_projection::ProjectorPose projector_pose;
+      if (!projector_->has_surface_calibration()) {
+        const auto projector_tf = tf_buffer_.lookupTransform(
+            projection_frame_, projector_frame_, stamp, tf2::durationFromSec(0.05));
+        const auto& t = projector_tf.transform.translation;
+        const auto& q = projector_tf.transform.rotation;
+        projector_pose = {{t.x, t.y, t.z}, {q.x, q.y, q.z, q.w}};
+      }
       std::vector<laser_projection::Point3D> path;
       path.reserve(message->poses.size());
       for (const auto& pose : message->poses) {
@@ -325,16 +368,13 @@ private:
         path.push_back({transformed.pose.position.x, transformed.pose.position.y,
                         transformed.pose.position.z});
       }
-      const auto& t = projector_tf.transform.translation;
-      const auto& q = projector_tf.transform.rotation;
       laser_projection::PathOptions options;
       options.color = {static_cast<unsigned char>(color_r_),
                        static_cast<unsigned char>(color_g_),
                        static_cast<unsigned char>(color_b_)};
       options.point_spacing = point_spacing_;
       options.arrows = arrows_;
-      projector_->show_path(path, {{t.x, t.y, t.z}, {q.x, q.y, q.z, q.w}},
-                            options, scan_rate_);
+      projector_->show_path(path, projector_pose, options, scan_rate_);
 
       visualization_msgs::msg::Marker marker;
       marker.header.frame_id = projection_frame_;
