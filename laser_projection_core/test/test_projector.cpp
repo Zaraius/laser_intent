@@ -192,9 +192,3 @@ TEST(Helios, RawCoordinatesUseHighResolutionFieldWithoutWrapping) {
   EXPECT_EQ(FakeHeliosFrameValue(9, 1), 65535);
   EXPECT_EQ(FakeHeliosFrameValue(9, 2), 0);
 }
-
-TEST(Core, Calibration2DPlaceholderFailsExplicitly) {
-  Calibration2D calibration;
-  EXPECT_THROW(calibration.fit({}), std::logic_error);
-  EXPECT_THROW(calibration.surface_to_mirror({0.0, 0.0}), std::logic_error);
-}

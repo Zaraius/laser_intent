@@ -45,21 +45,6 @@ struct Calibration {
   double offset_y{};
 };
 
-struct CalibrationPoint2D {
-  Point2D surface;
-  Point2D mirror;
-};
-
-// Placeholder for a 2D surface-to-normalized-mirror calibration.
-class Calibration2D {
-public:
-  void fit(const std::vector<CalibrationPoint2D>& correspondences);
-  Point2D surface_to_mirror(Point2D point) const;
-private:
-  double homography_[9]{};
-  bool fitted_{false};
-};
-
 struct PathOptions {
   Color color{0, 255, 0};
   double point_spacing{0.05};

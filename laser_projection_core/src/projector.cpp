@@ -1,7 +1,6 @@
 #include "laser_projection_core/projector.hpp"
 #include <algorithm>
 #include <cmath>
-#include <stdexcept>
 #include <utility>
 
 namespace laser_projection {
@@ -30,14 +29,6 @@ std::optional<Point3D> PlaneSurface::intersect(const Ray& ray) const {
 Projector::Projector(std::shared_ptr<const ProjectionSurface> surface,
                      std::shared_ptr<LaserBackend> backend, Calibration calibration)
     : surface_(std::move(surface)), backend_(std::move(backend)), calibration_(calibration) {}
-
-void Calibration2D::fit(const std::vector<CalibrationPoint2D>&) {
-  throw std::logic_error("2D calibration is not implemented");
-}
-
-Point2D Calibration2D::surface_to_mirror(Point2D) const {
-  throw std::logic_error("2D calibration is not implemented");
-}
 
 bool Projector::initialize() { return backend_->initialize(); }
 

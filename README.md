@@ -166,6 +166,10 @@ ros2 topic pub --once /plan nav_msgs/msg/Path "{header: {frame_id: map}, poses: 
  the box, and SVG top/bottom map to the box's top/bottom. The X/Y scale factors
  are applied around the box center. If scaling would exceed `[-1, 1]`, the
  whole image is uniformly reduced until it fits.
+ Wide text keeps its original aspect ratio, so use a wide target box (for example
+ `svg_bottom_left_y:=-0.25` and `svg_top_right_y:=0.25`) instead of the default
+ square when the lettering appears too short. Native SVG `<text>` must be
+ converted to vector paths before rendering.
 
  Parameters `svg_bottom_left_x/y`, `svg_top_right_x/y`, `svg_scale_x/y`,
  `svg_rotation_degrees`, `svg_hatch_spacing`, `svg_point_spacing`, and
@@ -194,7 +198,7 @@ ros2 topic pub --once /plan nav_msgs/msg/Path "{header: {frame_id: map}, poses: 
  units with `svg_hatch_spacing` (default `0.1`). `svg_point_spacing` controls
  the maximum distance between output points (default `0.05`).
  Stroke width is treated as a centerline, SVG opacity is ignored with a warning,
- and unsupported SVG elements are reported and skipped. Gradients, text,
+ and unsupported SVG elements are reported and skipped. Gradients,
  clipping, and embedded images are not rendered; clipping and masks produce
  warnings and are not applied. The core library also provides a standalone UDP
  sender (`ros2 run laser_projection_core laser_svg_sender --help`) for use with

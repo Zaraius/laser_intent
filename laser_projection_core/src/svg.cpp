@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -888,8 +889,9 @@ SvgRenderResult render_svg_file(const std::string& path,
                                 const SvgRenderOptions& options) {
   validate_options(options);
   if (path.empty()) throw std::invalid_argument("SVG path must not be empty");
-  xmlDocPtr document = xmlReadFile(path.c_str(), nullptr,
-                                   XML_PARSE_NONET | XML_PARSE_NOBLANKS);
+  std::unique_ptr<xmlDoc, decltype(&xmlFreeDoc)> document(
+      xmlReadFile(path.c_str(), nullptr, XML_PARSE_NONET | XML_PARSE_NOBLANKS),
+      &xmlFreeDoc);
   if (!document) {
     const auto* error = xmlGetLastError();
     throw std::runtime_error("Could not parse SVG '" + path + "'" +
@@ -900,9 +902,8 @@ SvgRenderResult render_svg_file(const std::string& path,
   std::vector<Shape> shapes;
   bool opacity_warning = false;
   const Style default_style;
-  visit(xmlDocGetRootElement(document), {}, default_style, opacity_warning,
+  visit(xmlDocGetRootElement(document.get()), {}, default_style, opacity_warning,
         result.warnings, shapes);
-  xmlFreeDoc(document);
   if (opacity_warning)
     result.warnings.push_back(
         "SVG opacity is ignored; solid RGB colors are preserved");
