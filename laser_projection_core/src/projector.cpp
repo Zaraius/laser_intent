@@ -1,6 +1,8 @@
 #include "laser_projection_core/projector.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <stdexcept>
 #include <utility>
 
 namespace laser_projection {
@@ -27,8 +29,116 @@ std::optional<Point3D> PlaneSurface::intersect(const Ray& ray) const {
 }
 
 Projector::Projector(std::shared_ptr<const ProjectionSurface> surface,
-                     std::shared_ptr<LaserBackend> backend, Calibration calibration)
-    : surface_(std::move(surface)), backend_(std::move(backend)), calibration_(calibration) {}
+                     std::shared_ptr<LaserBackend> backend, Calibration calibration,
+                     Calibration2D surface_calibration)
+    : surface_(std::move(surface)), backend_(std::move(backend)),
+      calibration_(calibration), surface_calibration_(std::move(surface_calibration)) {}
+
+void Calibration2D::fit(
+    const std::vector<CalibrationPoint2D>& correspondences) {
+  fitted_ = false;
+  if (correspondences.size() != 4)
+    throw std::invalid_argument("2D calibration requires exactly four point pairs");
+
+  double orientation = 0.0;
+  Point2D mirror_min{std::numeric_limits<double>::infinity(),
+                     std::numeric_limits<double>::infinity()};
+  Point2D mirror_max{-std::numeric_limits<double>::infinity(),
+                     -std::numeric_limits<double>::infinity()};
+  for (std::size_t i = 0; i < correspondences.size(); ++i) {
+    const auto& a = correspondences[i].surface;
+    const auto& b = correspondences[(i + 1) % correspondences.size()].surface;
+    const auto& c = correspondences[(i + 2) % correspondences.size()].surface;
+    if (!std::isfinite(a.x) || !std::isfinite(a.y) ||
+        !std::isfinite(correspondences[i].mirror.x) ||
+        !std::isfinite(correspondences[i].mirror.y))
+      throw std::invalid_argument("2D calibration points must be finite");
+    mirror_min.x = std::min(mirror_min.x, correspondences[i].mirror.x);
+    mirror_min.y = std::min(mirror_min.y, correspondences[i].mirror.y);
+    mirror_max.x = std::max(mirror_max.x, correspondences[i].mirror.x);
+    mirror_max.y = std::max(mirror_max.y, correspondences[i].mirror.y);
+    const double cross = (b.x - a.x) * (c.y - b.y) -
+                         (b.y - a.y) * (c.x - b.x);
+    if (std::abs(cross) < 1e-12 ||
+        (orientation != 0.0 && cross * orientation < 0.0))
+      throw std::invalid_argument(
+          "Surface calibration corners must form a convex, non-degenerate quadrilateral in order");
+    orientation = cross;
+  }
+
+  double equations[8][9]{};
+  for (std::size_t i = 0; i < 4; ++i) {
+    const auto& source = correspondences[i].surface;
+    const auto& target = correspondences[i].mirror;
+    const std::size_t row = i * 2;
+    equations[row][0] = source.x;
+    equations[row][1] = source.y;
+    equations[row][2] = 1.0;
+    equations[row][6] = -target.x * source.x;
+    equations[row][7] = -target.x * source.y;
+    equations[row][8] = target.x;
+    equations[row + 1][3] = source.x;
+    equations[row + 1][4] = source.y;
+    equations[row + 1][5] = 1.0;
+    equations[row + 1][6] = -target.y * source.x;
+    equations[row + 1][7] = -target.y * source.y;
+    equations[row + 1][8] = target.y;
+  }
+
+  for (std::size_t column = 0; column < 8; ++column) {
+    std::size_t pivot = column;
+    for (std::size_t row = column + 1; row < 8; ++row)
+      if (std::abs(equations[row][column]) >
+          std::abs(equations[pivot][column])) pivot = row;
+    if (std::abs(equations[pivot][column]) < 1e-12)
+      throw std::invalid_argument("Surface calibration corners are degenerate");
+    if (pivot != column)
+      for (std::size_t j = column; j <= 8; ++j)
+        std::swap(equations[pivot][j], equations[column][j]);
+    const double divisor = equations[column][column];
+    for (std::size_t j = column; j <= 8; ++j)
+      equations[column][j] /= divisor;
+    for (std::size_t row = 0; row < 8; ++row) {
+      if (row == column) continue;
+      const double factor = equations[row][column];
+      for (std::size_t j = column; j <= 8; ++j)
+        equations[row][j] -= factor * equations[column][j];
+    }
+  }
+
+  std::array<double, 9> candidate{};
+  for (std::size_t i = 0; i < 8; ++i) candidate[i] = equations[i][8];
+  candidate[8] = 1.0;
+  homography_ = candidate;
+  mirror_min_ = mirror_min;
+  mirror_max_ = mirror_max;
+  fitted_ = true;
+}
+
+std::optional<Point2D> Calibration2D::map(Point2D surface) const {
+  if (!fitted_ || !std::isfinite(surface.x) || !std::isfinite(surface.y))
+    return std::nullopt;
+  const double denominator = homography_[6] * surface.x +
+                             homography_[7] * surface.y + homography_[8];
+  if (!std::isfinite(denominator) || std::abs(denominator) < 1e-12)
+    return std::nullopt;
+  Point2D result{
+      (homography_[0] * surface.x + homography_[1] * surface.y + homography_[2]) /
+          denominator,
+      (homography_[3] * surface.x + homography_[4] * surface.y + homography_[5]) /
+          denominator};
+  if (!std::isfinite(result.x) || !std::isfinite(result.y)) return std::nullopt;
+  return result;
+}
+
+bool Calibration2D::contains(Point2D mirror) const {
+  constexpr double tolerance = 1e-9;
+  return fitted_ && std::isfinite(mirror.x) && std::isfinite(mirror.y) &&
+         mirror.x >= mirror_min_.x - tolerance &&
+         mirror.x <= mirror_max_.x + tolerance &&
+         mirror.y >= mirror_min_.y - tolerance &&
+         mirror.y <= mirror_max_.y + tolerance;
+}
 
 bool Projector::initialize() { return backend_->initialize(); }
 
@@ -41,27 +151,50 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
                            ProjectorPose projector_pose, PathOptions options,
                            double scan_rate) {
   last_frame_.clear();
-  if (paths.empty() || options.point_spacing <= 0.0) {
+  const bool valid_input = !paths.empty() &&
+      std::isfinite(options.point_spacing) && options.point_spacing > 0.0 &&
+      std::isfinite(scan_rate) && scan_rate > 0.0 &&
+      std::all_of(paths.begin(), paths.end(), [](const auto& path) {
+        return std::all_of(path.begin(), path.end(), [](const Point3D& point) {
+          return std::isfinite(point.x) && std::isfinite(point.y) &&
+                 std::isfinite(point.z);
+        });
+      });
+  if (!valid_input) {
     backend_->blackout();
     return false;
   }
+  bool mapping_valid = true;
   std::vector<std::vector<Point3D>> projected_paths;
   for (const auto& path : paths) {
     std::vector<Point3D> projected;
     for (const auto& target : path) {
-      auto point = surface_->intersect({projector_pose.position,
-        {target.x - projector_pose.position.x, target.y - projector_pose.position.y,
-         target.z - projector_pose.position.z}});
-      if (point) projected.push_back(*point);
+      if (surface_calibration_.fitted()) {
+        const auto mapped = surface_calibration_.map({target.x, target.y});
+        if (!mapped || !surface_calibration_.contains(*mapped)) {
+          mapping_valid = false;
+          continue;
+        }
+        projected.push_back({mapped->x, mapped->y, target.z});
+      } else {
+        auto point = surface_->intersect({projector_pose.position,
+          {target.x - projector_pose.position.x, target.y - projector_pose.position.y,
+           target.z - projector_pose.position.z}});
+        if (point) projected.push_back(*point);
+      }
     }
     if (!projected.empty()) projected_paths.push_back(std::move(projected));
   }
-  if (projected_paths.empty()) {
+  if (!mapping_valid || projected_paths.empty()) {
     backend_->blackout();
     return false;
   }
 
   auto append = [&](Point3D p, bool blank) {
+    if (surface_calibration_.fitted()) {
+      last_frame_.push_back({p.x, p.y, options.color, blank});
+      return;
+    }
     const auto local = rotate_inverse(
         {p.x - projector_pose.position.x, p.y - projector_pose.position.y,
          p.z - projector_pose.position.z}, projector_pose.orientation);
@@ -139,6 +272,20 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
     }
   }
   append_blank_travel(frame_end, projected_paths.front().front());
+  const bool valid_frame = mapping_valid && last_frame_.size() >= 2 &&
+      std::all_of(last_frame_.begin(), last_frame_.end(), [](const LaserPoint& point) {
+        return std::isfinite(point.x) && std::isfinite(point.y);
+      });
+  const bool in_mirror_field = !surface_calibration_.fitted() ||
+      std::all_of(last_frame_.begin(), last_frame_.end(), [](const LaserPoint& point) {
+        return point.x >= -1.0 && point.x <= 1.0 &&
+               point.y >= -1.0 && point.y <= 1.0;
+      });
+  if (!valid_frame || !in_mirror_field) {
+    last_frame_.clear();
+    backend_->blackout();
+    return false;
+  }
   return backend_->send_frame(last_frame_, scan_rate);
 }
 

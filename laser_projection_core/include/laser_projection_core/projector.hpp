@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <optional>
+#include <array>
 #include <vector>
 
 namespace laser_projection {
@@ -45,6 +46,24 @@ struct Calibration {
   double offset_y{};
 };
 
+struct CalibrationPoint2D {
+  Point2D surface;
+  Point2D mirror;
+};
+
+class Calibration2D {
+public:
+  void fit(const std::vector<CalibrationPoint2D>& correspondences);
+  std::optional<Point2D> map(Point2D surface) const;
+  bool contains(Point2D mirror) const;
+  bool fitted() const { return fitted_; }
+private:
+  std::array<double, 9> homography_{};
+  Point2D mirror_min_{};
+  Point2D mirror_max_{};
+  bool fitted_{false};
+};
+
 struct PathOptions {
   Color color{0, 255, 0};
   double point_spacing{0.05};
@@ -55,8 +74,9 @@ class Projector {
 public:
   Projector(std::shared_ptr<const ProjectionSurface> surface,
             std::shared_ptr<LaserBackend> backend,
-            Calibration calibration = {});
+            Calibration calibration = {}, Calibration2D surface_calibration = {});
   bool initialize();
+  bool has_surface_calibration() const { return surface_calibration_.fitted(); }
   bool show_path(const std::vector<Point3D>& path, ProjectorPose projector_pose,
                  PathOptions options = {}, double scan_rate = 30000.0);
   bool show_paths(const std::vector<std::vector<Point3D>>& paths,
@@ -71,6 +91,7 @@ private:
   std::shared_ptr<const ProjectionSurface> surface_;
   std::shared_ptr<LaserBackend> backend_;
   Calibration calibration_;
+  Calibration2D surface_calibration_;
   std::vector<LaserPoint> last_frame_;
 };
 
