@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <array>
+#include <utility>
 #include <vector>
 
 namespace laser_projection {
@@ -36,7 +37,7 @@ public:
   virtual ~LaserBackend() = default;
   virtual bool initialize() = 0;
   virtual bool send_frame(const std::vector<LaserPoint>& points, double scan_rate) = 0;
-  virtual void blackout() = 0;
+  virtual bool blackout() = 0;
 };
 
 struct Calibration {
@@ -56,11 +57,17 @@ public:
   void fit(const std::vector<CalibrationPoint2D>& correspondences);
   std::optional<Point2D> map(Point2D surface) const;
   bool contains(Point2D mirror) const;
+  std::optional<std::pair<Point3D, Point3D>> clip_surface_segment(
+      Point3D start, Point3D end) const;
+  std::optional<std::pair<Point3D, Point3D>> clip_segment(
+      Point3D start, Point3D end) const;
   bool fitted() const { return fitted_; }
 private:
   std::array<double, 9> homography_{};
+  std::array<Point2D, 4> surface_corners_{};
   Point2D mirror_min_{};
   Point2D mirror_max_{};
+  double surface_winding_{};
   bool fitted_{false};
 };
 
@@ -76,6 +83,7 @@ public:
             std::shared_ptr<LaserBackend> backend,
             Calibration calibration = {}, Calibration2D surface_calibration = {});
   bool initialize();
+  bool blackout();
   bool has_surface_calibration() const { return surface_calibration_.fitted(); }
   bool show_path(const std::vector<Point3D>& path, ProjectorPose projector_pose,
                  PathOptions options = {}, double scan_rate = 30000.0);

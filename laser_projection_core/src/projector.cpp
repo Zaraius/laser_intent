@@ -41,6 +41,7 @@ void Calibration2D::fit(
     throw std::invalid_argument("2D calibration requires exactly four point pairs");
 
   double orientation = 0.0;
+  std::array<Point2D, 4> surface_corners{};
   Point2D mirror_min{std::numeric_limits<double>::infinity(),
                      std::numeric_limits<double>::infinity()};
   Point2D mirror_max{-std::numeric_limits<double>::infinity(),
@@ -57,6 +58,7 @@ void Calibration2D::fit(
     mirror_min.y = std::min(mirror_min.y, correspondences[i].mirror.y);
     mirror_max.x = std::max(mirror_max.x, correspondences[i].mirror.x);
     mirror_max.y = std::max(mirror_max.y, correspondences[i].mirror.y);
+    surface_corners[i] = a;
     const double cross = (b.x - a.x) * (c.y - b.y) -
                          (b.y - a.y) * (c.x - b.x);
     if (std::abs(cross) < 1e-12 ||
@@ -110,8 +112,10 @@ void Calibration2D::fit(
   for (std::size_t i = 0; i < 8; ++i) candidate[i] = equations[i][8];
   candidate[8] = 1.0;
   homography_ = candidate;
+  surface_corners_ = surface_corners;
   mirror_min_ = mirror_min;
   mirror_max_ = mirror_max;
+  surface_winding_ = orientation > 0.0 ? 1.0 : -1.0;
   fitted_ = true;
 }
 
@@ -140,7 +144,92 @@ bool Calibration2D::contains(Point2D mirror) const {
          mirror.y <= mirror_max_.y + tolerance;
 }
 
+std::optional<std::pair<Point3D, Point3D>> Calibration2D::clip_surface_segment(
+    Point3D start, Point3D end) const {
+  if (!fitted_ ||
+      !std::isfinite(start.x) || !std::isfinite(start.y) || !std::isfinite(start.z) ||
+      !std::isfinite(end.x) || !std::isfinite(end.y) || !std::isfinite(end.z))
+    return std::nullopt;
+
+  const double dx = end.x - start.x;
+  const double dy = end.y - start.y;
+  double t_min = 0.0;
+  double t_max = 1.0;
+  for (std::size_t i = 0; i < surface_corners_.size(); ++i) {
+    const auto& edge_start = surface_corners_[i];
+    const auto& edge_end = surface_corners_[(i + 1) % surface_corners_.size()];
+    const double edge_x = edge_end.x - edge_start.x;
+    const double edge_y = edge_end.y - edge_start.y;
+    const double start_side =
+        surface_winding_ *
+        (edge_x * (start.y - edge_start.y) -
+         edge_y * (start.x - edge_start.x));
+    const double side_delta = surface_winding_ * (edge_x * dy - edge_y * dx);
+    if (std::abs(side_delta) < 1e-12) {
+      if (start_side < -1e-12) return std::nullopt;
+      continue;
+    }
+
+    const double crossing = -start_side / side_delta;
+    if (side_delta > 0.0)
+      t_min = std::max(t_min, crossing);
+    else
+      t_max = std::min(t_max, crossing);
+    if (t_min > t_max) return std::nullopt;
+  }
+
+  const auto interpolate = [&start, &end](double t) {
+    return Point3D{start.x + t * (end.x - start.x),
+                   start.y + t * (end.y - start.y),
+                   start.z + t * (end.z - start.z)};
+  };
+  return std::make_pair(interpolate(t_min), interpolate(t_max));
+}
+
+std::optional<std::pair<Point3D, Point3D>> Calibration2D::clip_segment(
+    Point3D start, Point3D end) const {
+  if (!fitted_ ||
+      !std::isfinite(start.x) || !std::isfinite(start.y) || !std::isfinite(start.z) ||
+      !std::isfinite(end.x) || !std::isfinite(end.y) || !std::isfinite(end.z))
+    return std::nullopt;
+
+  const double dx = end.x - start.x;
+  const double dy = end.y - start.y;
+  double t_min = 0.0;
+  double t_max = 1.0;
+  const auto clip_test = [&t_min, &t_max](double p, double q) {
+    if (std::abs(p) < 1e-12) return q >= 0.0;
+    const double ratio = q / p;
+    if (p < 0.0) {
+      if (ratio > t_max) return false;
+      t_min = std::max(t_min, ratio);
+    } else {
+      if (ratio < t_min) return false;
+      t_max = std::min(t_max, ratio);
+    }
+    return true;
+  };
+
+  if (!clip_test(-dx, start.x - mirror_min_.x) ||
+      !clip_test(dx, mirror_max_.x - start.x) ||
+      !clip_test(-dy, start.y - mirror_min_.y) ||
+      !clip_test(dy, mirror_max_.y - start.y))
+    return std::nullopt;
+
+  const auto interpolate = [&start, &end](double t) {
+    return Point3D{start.x + t * (end.x - start.x),
+                   start.y + t * (end.y - start.y),
+                   start.z + t * (end.z - start.z)};
+  };
+  return std::make_pair(interpolate(t_min), interpolate(t_max));
+}
+
 bool Projector::initialize() { return backend_->initialize(); }
+
+bool Projector::blackout() {
+  last_frame_.clear();
+  return backend_->blackout();
+}
 
 bool Projector::show_path(const std::vector<Point3D>& path, ProjectorPose projector_pose,
                           PathOptions options, double scan_rate) {
@@ -164,28 +253,98 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
     backend_->blackout();
     return false;
   }
-  bool mapping_valid = true;
-  std::vector<std::vector<Point3D>> projected_paths;
+  struct ProjectedPath {
+    std::vector<Point3D> points;
+    bool draw_arrow_at_end{};
+  };
+  std::vector<ProjectedPath> projected_paths;
   for (const auto& path : paths) {
-    std::vector<Point3D> projected;
-    for (const auto& target : path) {
-      if (surface_calibration_.fitted()) {
-        const auto mapped = surface_calibration_.map({target.x, target.y});
-        if (!mapped || !surface_calibration_.contains(*mapped)) {
-          mapping_valid = false;
+    if (surface_calibration_.fitted()) {
+      if (path.size() == 1) {
+        const auto clipped_surface =
+            surface_calibration_.clip_surface_segment(path.front(), path.front());
+        if (!clipped_surface) continue;
+        const auto& surface_point = clipped_surface->first;
+        const auto mapped =
+            surface_calibration_.map({surface_point.x, surface_point.y});
+        if (mapped && surface_calibration_.contains(*mapped))
+          projected_paths.push_back(
+              {{Point3D{mapped->x, mapped->y, surface_point.z}}, false});
+        continue;
+      }
+
+      std::vector<Point3D> current;
+      bool current_ends_at_path_end = false;
+      const auto flush_current = [&]() {
+        if (!current.empty()) {
+          projected_paths.push_back(
+              {std::move(current), options.arrows && current_ends_at_path_end});
+          current.clear();
+        }
+        current_ends_at_path_end = false;
+      };
+      const auto same_point = [](const Point3D& a, const Point3D& b) {
+        return std::abs(a.x - b.x) < 1e-9 &&
+               std::abs(a.y - b.y) < 1e-9;
+      };
+
+      for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+        const auto& start = path[i];
+        const auto& end = path[i + 1];
+        const auto clipped_surface =
+            surface_calibration_.clip_surface_segment(start, end);
+        if (!clipped_surface) {
+          flush_current();
           continue;
         }
-        projected.push_back({mapped->x, mapped->y, target.z});
-      } else {
+        const auto& clipped_start = clipped_surface->first;
+        const auto& clipped_end = clipped_surface->second;
+        const auto mapped_start =
+            surface_calibration_.map({clipped_start.x, clipped_start.y});
+        const auto mapped_end =
+            surface_calibration_.map({clipped_end.x, clipped_end.y});
+        if (!mapped_start || !mapped_end) {
+          flush_current();
+          continue;
+        }
+        const Point3D mapped_a{mapped_start->x, mapped_start->y, clipped_start.z};
+        const Point3D mapped_b{mapped_end->x, mapped_end->y, clipped_end.z};
+        const auto clipped = surface_calibration_.clip_segment(mapped_a, mapped_b);
+        if (!clipped) {
+          flush_current();
+          continue;
+        }
+
+        if (current.empty()) {
+          current.push_back(clipped->first);
+        } else if (!same_point(current.back(), clipped->first)) {
+          flush_current();
+          current.push_back(clipped->first);
+        }
+        if (!same_point(current.back(), clipped->second))
+          current.push_back(clipped->second);
+        const bool reaches_path_end =
+            same_point(clipped_end, end) && same_point(clipped->second, mapped_b);
+        current_ends_at_path_end =
+            i + 2 == path.size() && reaches_path_end;
+        if (!current_ends_at_path_end && i + 2 < path.size() &&
+            !reaches_path_end)
+          flush_current();
+      }
+      flush_current();
+    } else {
+      std::vector<Point3D> projected;
+      for (const auto& target : path) {
         auto point = surface_->intersect({projector_pose.position,
           {target.x - projector_pose.position.x, target.y - projector_pose.position.y,
            target.z - projector_pose.position.z}});
         if (point) projected.push_back(*point);
       }
+      if (!projected.empty())
+        projected_paths.push_back({std::move(projected), options.arrows});
     }
-    if (!projected.empty()) projected_paths.push_back(std::move(projected));
   }
-  if (!mapping_valid || projected_paths.empty()) {
+  if (projected_paths.empty()) {
     backend_->blackout();
     return false;
   }
@@ -202,7 +361,7 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
                            local.y * calibration_.scale_y + calibration_.offset_y,
                            options.color, blank});
   };
-  Point3D frame_end = projected_paths.front().front();
+  Point3D frame_end = projected_paths.front().points.front();
   auto append_blank_travel = [&](const Point3D& start, const Point3D& end) {
     const double distance = std::hypot(end.x - start.x, end.y - start.y);
     if (distance < 1e-9) return;
@@ -216,7 +375,8 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
               start.z + t * (end.z - start.z)}, true);
     }
   };
-  for (const auto& projected : projected_paths) {
+  for (const auto& projected_path : projected_paths) {
+    const auto& projected = projected_path.points;
     if (last_frame_.empty()) append(projected.front(), true);
     else append_blank_travel(frame_end, projected.front());
     if (projected.size() == 1) {
@@ -237,7 +397,8 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
         frame_end = point;
       }
     }
-    if (options.arrows && projected.size() > 1) {
+    if (options.arrows && projected_path.draw_arrow_at_end &&
+        projected.size() > 1) {
       const auto tip = projected.back();
       const auto from = projected[projected.size() - 2];
       const double length = std::hypot(tip.x - from.x, tip.y - from.y);
@@ -247,6 +408,9 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
         const double uy = (tip.y - from.y) / length;
         const Point3D left{tip.x - size * (ux - uy), tip.y - size * (uy + ux), tip.z};
         const Point3D right{tip.x - size * (ux + uy), tip.y - size * (uy - ux), tip.z};
+        const bool arrow_in_bounds = !surface_calibration_.fitted() ||
+            (surface_calibration_.contains({left.x, left.y}) &&
+             surface_calibration_.contains({right.x, right.y}));
 
         auto append_stroke = [&](const Point3D& start, const Point3D& end) {
           append(start, true);
@@ -263,16 +427,18 @@ bool Projector::show_paths(const std::vector<std::vector<Point3D>>& paths,
           }
         };
 
-        append(tip, true);
-        append_stroke(left, tip);
+        if (arrow_in_bounds) {
+          append(tip, true);
+          append_stroke(left, tip);
 
-        append(tip, true);
-        append_stroke(right, tip);
+          append(tip, true);
+          append_stroke(right, tip);
+        }
       }
     }
   }
-  append_blank_travel(frame_end, projected_paths.front().front());
-  const bool valid_frame = mapping_valid && last_frame_.size() >= 2 &&
+  append_blank_travel(frame_end, projected_paths.front().points.front());
+  const bool valid_frame = last_frame_.size() >= 2 &&
       std::all_of(last_frame_.begin(), last_frame_.end(), [](const LaserPoint& point) {
         return std::isfinite(point.x) && std::isfinite(point.y);
       });

@@ -1,6 +1,7 @@
 #include "laser_projection_core/projector.hpp"
 #include "laser_projection_core/backends.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <stdexcept>
@@ -14,7 +15,10 @@ class TestBackend final : public LaserBackend {
 public:
   bool initialize() override { return true; }
   bool send_frame(const std::vector<LaserPoint>& p, double) override { frame = p; return true; }
-  void blackout() override { ++blackout_count; }
+  bool blackout() override {
+    ++blackout_count;
+    return true;
+  }
   std::vector<LaserPoint> frame;
   int blackout_count{};
 };
@@ -34,6 +38,18 @@ TEST(Core, PathSamplingAndColor) {
   EXPECT_EQ(backend->frame.front().color.r, 255);
   EXPECT_GE(backend->frame.size(), 5u);
   EXPECT_TRUE(backend->frame.front().blank);
+}
+
+TEST(Core, BlackoutClearsLastFrameAndCallsBackend) {
+  auto backend = std::make_shared<TestBackend>();
+  Projector projector(std::make_shared<PlaneSurface>(), backend);
+  ASSERT_TRUE(projector.show_path({{0, 0, 0}, {1, 0, 0}}, {{0, 0, 1}, {}}));
+  ASSERT_FALSE(projector.last_frame().empty());
+
+  ASSERT_TRUE(projector.blackout());
+
+  EXPECT_TRUE(projector.last_frame().empty());
+  EXPECT_EQ(backend->blackout_count, 1);
 }
 
 TEST(Core, OptionalArrowAddsBlankedTravel) {
@@ -173,6 +189,27 @@ TEST(Core, FourCornerCalibrationMapsMeasuredCornersToMirrorField) {
   }
 }
 
+TEST(Core, FourCornerCalibrationClipsAgainstSkewedSurfacePolygon) {
+  Calibration2D calibration;
+  calibration.fit({{{0, 0}, {-1, -1}}, {{2, -0.5}, {1, -1}},
+                   {{2, 1.5}, {1, 1}}, {{0, 1}, {-1, 1}}});
+
+  const auto clipped =
+      calibration.clip_surface_segment({-1, 0.5, 0}, {3, 0.5, 0});
+  ASSERT_TRUE(clipped);
+  EXPECT_NEAR(clipped->first.x, 0.0, 1e-9);
+  EXPECT_NEAR(clipped->second.x, 2.0, 1e-9);
+  EXPECT_NEAR(clipped->first.y, 0.5, 1e-9);
+  EXPECT_NEAR(clipped->second.y, 0.5, 1e-9);
+
+  const auto reversed =
+      calibration.clip_surface_segment({3, 0.5, 0}, {-1, 0.5, 0});
+  ASSERT_TRUE(reversed);
+  EXPECT_NEAR(reversed->first.x, 2.0, 1e-9);
+  EXPECT_NEAR(reversed->second.x, 0.0, 1e-9);
+  EXPECT_FALSE(calibration.clip_surface_segment({-1, 2, 0}, {3, 2, 0}));
+}
+
 TEST(Core, FourCornerCalibrationSupportsInsetMirrorRange) {
   Calibration2D calibration;
   calibration.fit({{{0, 0}, {-0.7, -0.6}}, {{2, 0}, {0.7, -0.6}},
@@ -186,8 +223,14 @@ TEST(Core, FourCornerCalibrationSupportsInsetMirrorRange) {
 
   auto backend = std::make_shared<TestBackend>();
   Projector projector(std::make_shared<PlaneSurface>(), backend, {}, calibration);
-  EXPECT_FALSE(projector.show_path({{0, 0.5, 0}, {2.1, 0.5, 0}}, {}));
-  EXPECT_TRUE(backend->frame.empty());
+  ASSERT_TRUE(projector.show_path({{0, 0.5, 0}, {2.1, 0.5, 0}}, {}));
+  ASSERT_FALSE(backend->frame.empty());
+  EXPECT_TRUE(std::all_of(backend->frame.begin(), backend->frame.end(),
+                          [](const LaserPoint& point) {
+                            return point.x >= -0.7 && point.x <= 0.7 &&
+                                   point.y >= -0.6 && point.y <= 0.6;
+                          }));
+  EXPECT_DOUBLE_EQ(backend->frame.back().x, -0.7);
 }
 
 TEST(Core, ProjectorUsesFourCornerCalibrationWithoutProjectorPose) {
@@ -204,14 +247,54 @@ TEST(Core, ProjectorUsesFourCornerCalibrationWithoutProjectorPose) {
   EXPECT_NEAR(backend->frame.back().x, -1.0, 1e-9);
 }
 
-TEST(Core, FourCornerCalibrationRejectsPathOutsideMirrorField) {
+TEST(Core, FourCornerCalibrationClipsCrossingPathToMirrorField) {
   auto backend = std::make_shared<TestBackend>();
   Calibration2D calibration;
   calibration.fit({{{0, 0}, {-1, -1}}, {{2, 0}, {1, -1}},
                    {{2, 1}, {1, 1}}, {{0, 1}, {-1, 1}}});
   Projector projector(std::make_shared<PlaneSurface>(), backend, {}, calibration);
-  EXPECT_FALSE(projector.show_path({{0, 0.5, 0}, {2.1, 0.5, 0}}, {}));
+  ASSERT_TRUE(projector.show_path({{-1, 0.5, 0}, {3, 0.5, 0}}, {}));
+  ASSERT_FALSE(backend->frame.empty());
+  EXPECT_TRUE(std::all_of(backend->frame.begin(), backend->frame.end(),
+                          [](const LaserPoint& point) {
+                            return point.x >= -1.0 && point.x <= 1.0 &&
+                                   point.y >= -1.0 && point.y <= 1.0;
+                          }));
+  EXPECT_DOUBLE_EQ(backend->frame.back().x, -1.0);
+}
+
+TEST(Core, FourCornerCalibrationBlanksPathWhollyOutsideMirrorField) {
+  auto backend = std::make_shared<TestBackend>();
+  Calibration2D calibration;
+  calibration.fit({{{0, 0}, {-1, -1}}, {{2, 0}, {1, -1}},
+                   {{2, 1}, {1, 1}}, {{0, 1}, {-1, 1}}});
+  Projector projector(std::make_shared<PlaneSurface>(), backend, {}, calibration);
+  EXPECT_FALSE(projector.show_path({{2.1, 0.5, 0}, {2.2, 0.5, 0}}, {}));
   EXPECT_TRUE(backend->frame.empty());
+  EXPECT_EQ(backend->blackout_count, 1);
+}
+
+TEST(Core, FourCornerCalibrationKeepsTravelBetweenClippedSegmentsBlank) {
+  auto backend = std::make_shared<TestBackend>();
+  Calibration2D calibration;
+  calibration.fit({{{0, 0}, {-1, -1}}, {{2, 0}, {1, -1}},
+                   {{2, 2}, {1, 1}}, {{0, 2}, {-1, 1}}});
+  Projector projector(std::make_shared<PlaneSurface>(), backend, {}, calibration);
+  ASSERT_TRUE(projector.show_path(
+      {{0.5, 1, 0}, {2.5, 1, 0}, {2.5, 3, 0}, {1.5, 1, 0}}, {}));
+
+  const auto blank_travel = std::find_if(
+      backend->frame.begin(), backend->frame.end(), [](const LaserPoint& point) {
+        return std::abs(point.x - 1.0) < 1e-9 &&
+               std::abs(point.y - 0.5) < 1e-9;
+      });
+  ASSERT_NE(blank_travel, backend->frame.end());
+  EXPECT_TRUE(blank_travel->blank);
+  EXPECT_TRUE(std::all_of(backend->frame.begin(), backend->frame.end(),
+                          [](const LaserPoint& point) {
+                            return point.x >= -1.0 && point.x <= 1.0 &&
+                                   point.y >= -1.0 && point.y <= 1.0;
+                          }));
 }
 
 TEST(Core, FourCornerCalibrationRejectsDegenerateCorners) {

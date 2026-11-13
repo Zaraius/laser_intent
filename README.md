@@ -137,12 +137,16 @@ The flat list contains four `(x,y)` pairs in the order above. The optional
 `calibration_mirror_bounds` list is `[min_x,min_y,max_x,max_y]` and must stay
 inside `[-1,1]`; using `[-0.7,-0.7,0.7,0.7]` maps the measured rectangle to a
 smaller portion of the scanner field. Paths mapping outside the chosen bounds
-are blanked. Leave a little margin inside the measured physical boundary when
-choosing this range. If `calibration_surface_corners` is omitted or empty, the
+are clipped to the selected mirror rectangle; portions outside it remain blank,
+and paths with no portion inside are blacked out. Leave a little margin inside
+the measured physical boundary when choosing this range. If
+`calibration_surface_corners` is omitted or empty, the
 node keeps using its existing projector-TF ray projection and scale/offset
 calibration. The four-corner calibration is a projective homography, so it
 corrects perspective on one plane; it does not calibrate changing floor height,
 robot pitch/roll, or non-planar surfaces.
+The ROS node keeps only the latest queued path and blacks out the projector
+after three seconds without receiving a new path.
 
 To collect measurements, park the robot on a level surface, mark the desired
 rectangle on the floor, and measure each corner's X/Y offset from the
@@ -272,3 +276,20 @@ ros2 topic pub --once /plan nav_msgs/msg/Path "{header: {frame_id: map}, poses: 
  the existing `LASER_FRAME` receiver; use the ROS command above to send to
  Helios through the laser node. Invalid settings, oversized frames, and
  malformed SVGs are reported instead of silently clipped.
+
+
+command to run:
+ros2 run laser_projection_ros laser_projection_node --ros-args \
+  --params-file /home/agx/ros2_jazzy/src/laser_intent/laser_projection_ros/calibration/calibration.yaml \
+  -p backend:=helios \
+  -p helios_library:=/home/agx/helios_dac/sdk/cpp/shared_library/libHeliosDacAPI.so.timeoutfix \
+  -p scan_rate:=10000.0 \
+  -p point_spacing:=0.01
+
+ros2 topic pub --once /plan nav_msgs/msg/Path \
+  "{header: {frame_id: base_link}, poses: [{pose: {position: {x: 1.0, y: -0.3}, orientation: {w: 1.0}}}, {pose: {position: {x: 1.0, y: 0.3}, orientation: {w: 1.0}}}]}"
+
+
+
+
+  ros2 run laser_projection_ros laser_projection_node --ros-args   --log-level laser_projection_node:=debug   --params-file /home/agx/ros2_jazzy/src/laser_intent/laser_projection_ros/calibration/calibration.yaml   -p backend:=helios   -p helios_library:=/home/agx/helios_dac/sdk/cpp/shared_library/libHeliosDacAPI.so.timeoutfix   -p scan_rate:=10000.0   -p point_spacing:=0.1

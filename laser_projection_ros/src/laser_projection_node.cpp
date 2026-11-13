@@ -96,8 +96,11 @@ public:
       RCLCPP_INFO(get_logger(), "Laser backend initialized (%s)", backend_name_.c_str());
     }
     path_sub_ = create_subscription<nav_msgs::msg::Path>(
-        path_topic_, rclcpp::QoS(10),
-        std::bind(&LaserProjectionNode::path_callback, this, std::placeholders::_1));
+        path_topic_, rclcpp::QoS(1),
+        [this](const nav_msgs::msg::Path::SharedPtr message) {
+          last_path_received_ = std::chrono::steady_clock::now();
+          path_callback(message);
+        });
     color_sub_ = create_subscription<std_msgs::msg::ColorRGBA>(
         color_topic_, rclcpp::QoS(10),
         [this](const std_msgs::msg::ColorRGBA::SharedPtr message) {
@@ -113,6 +116,19 @@ public:
         "/laser_command", rclcpp::QoS(10),
         std::bind(&LaserProjectionNode::command_callback, this, std::placeholders::_1));
     marker_pub_ = create_publisher<visualization_msgs::msg::Marker>("~/debug_path", 10);
+    path_timeout_timer_ = create_wall_timer(std::chrono::milliseconds(250), [this]() {
+      if (!last_path_ ||
+          std::chrono::steady_clock::now() - last_path_received_ <
+              std::chrono::seconds(3))
+        return;
+      if (!projector_->blackout()) {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000,
+                              "Failed to send stale-path blackout; will retry");
+        return;
+      }
+      last_path_.reset();
+      RCLCPP_INFO(get_logger(), "No path received for 3 seconds; laser blacked out");
+    });
   }
 
 private:
@@ -338,11 +354,17 @@ private:
   }
 
   void path_callback(const nav_msgs::msg::Path::SharedPtr message) {
+    const auto processing_started = std::chrono::steady_clock::now();
     try {
       if (message->header.frame_id.empty()) {
         RCLCPP_WARN(get_logger(), "Ignoring path with empty header.frame_id");
+        last_path_.reset();
+        if (!projector_->blackout())
+          RCLCPP_ERROR(get_logger(), "Failed to blackout after receiving an invalid path");
         return;
       }
+      RCLCPP_DEBUG(get_logger(), "Received path with %zu poses in frame '%s'",
+                   message->poses.size(), message->header.frame_id.c_str());
       last_path_ = message;
       if (blink_timer_) blink_timer_->cancel();
       blink_timer_.reset();
@@ -368,13 +390,43 @@ private:
         path.push_back({transformed.pose.position.x, transformed.pose.position.y,
                         transformed.pose.position.z});
       }
+      if (!path.empty()) {
+        double min_x = path.front().x;
+        double max_x = path.front().x;
+        double min_y = path.front().y;
+        double max_y = path.front().y;
+        for (const auto& point : path) {
+          min_x = std::min(min_x, point.x);
+          max_x = std::max(max_x, point.x);
+          min_y = std::min(min_y, point.y);
+          max_y = std::max(max_y, point.y);
+        }
+        RCLCPP_DEBUG(get_logger(),
+                     "Transformed path to '%s': %zu poses, x=[%.3f, %.3f], "
+                     "y=[%.3f, %.3f]",
+                     projection_frame_.c_str(), path.size(), min_x, max_x,
+                     min_y, max_y);
+      }
       laser_projection::PathOptions options;
       options.color = {static_cast<unsigned char>(color_r_),
                        static_cast<unsigned char>(color_g_),
                        static_cast<unsigned char>(color_b_)};
       options.point_spacing = point_spacing_;
       options.arrows = arrows_;
-      projector_->show_path(path, projector_pose, options, scan_rate_);
+      const bool sent = projector_->show_path(path, projector_pose, options, scan_rate_);
+      if (!sent) {
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Path projection/frame send failed for %zu transformed poses; "
+            "check calibration bounds and backend errors",
+            path.size());
+      } else {
+        RCLCPP_DEBUG(get_logger(), "Path frame sent successfully");
+      }
+      const auto elapsed =
+          std::chrono::steady_clock::now() - processing_started;
+      RCLCPP_DEBUG(get_logger(), "Path callback completed in %.1f ms",
+                   std::chrono::duration<double, std::milli>(elapsed).count());
 
       visualization_msgs::msg::Marker marker;
       marker.header.frame_id = projection_frame_;
@@ -419,8 +471,10 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
   rclcpp::Subscription<std_msgs::msg::ColorRGBA>::SharedPtr color_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr command_sub_;
+  rclcpp::TimerBase::SharedPtr path_timeout_timer_;
   rclcpp::TimerBase::SharedPtr blink_timer_;
   nav_msgs::msg::Path::SharedPtr last_path_;
+  std::chrono::steady_clock::time_point last_path_received_{};
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr marker_pub_;
 };
 

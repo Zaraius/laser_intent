@@ -54,8 +54,8 @@ bool UdpBackend::send_frame(const std::vector<LaserPoint>& points, double scan_r
   return true;
 }
 
-void UdpBackend::blackout() {
-  if (socket_ >= 0) send_frame({}, 0.0);
+bool UdpBackend::blackout() {
+  return socket_ >= 0 && send_frame({}, 0.0);
 }
 
 }  // namespace laser_projection

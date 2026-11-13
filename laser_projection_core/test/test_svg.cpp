@@ -20,7 +20,7 @@ public:
     frame = points;
     return true;
   }
-  void blackout() override {}
+  bool blackout() override { return true; }
   std::vector<laser_projection::LaserPoint> frame;
 };
 

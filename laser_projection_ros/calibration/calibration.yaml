@@ -1,0 +1,20 @@
+# laser_projection_node:
+#   ros__parameters:
+#     projection_frame: base_link
+#     calibration_surface_corners: [
+#       0.5715, -0.2794,
+#       3.2004, -1.3843,
+#       3.2004,  1.3843,
+#       0.5715,  0.2794
+#     ]
+#     calibration_mirror_bounds: [-1.0, -1.0, 1.0, -0.2]
+laser_projection_node:
+  ros__parameters:
+    projection_frame: base_link
+    calibration_surface_corners: [
+      0.5715,  0.2794,
+      0.5715, -0.2794,
+      3.2004, -1.3843,
+      3.2004,  1.3843
+    ]
+    calibration_mirror_bounds: [-1.0, -1.0, 1.0, -0.2]

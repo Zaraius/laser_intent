@@ -56,9 +56,18 @@ bool HeliosBackend::send_frame(const std::vector<LaserPoint>& points, double sca
                      channel(point.color.g), channel(point.color.b)});
   }
   if (get_status_) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(100);
     int status = get_status_(device_);
+    int status_errors = 0;
     while (status != 1) {
+      if (status < 0 && ++status_errors >= 3) {
+        std::fprintf(stderr,
+                     "[HeliosBackend] GetStatus failed repeatedly (status %d)\n",
+                     status);
+        return false;
+      }
+      if (status >= 0) status_errors = 0;
       if (std::chrono::steady_clock::now() >= deadline) {
         std::fprintf(stderr, "[HeliosBackend] Timed out waiting for device readiness (status %d)\n",
                      status);
@@ -81,11 +90,9 @@ bool HeliosBackend::send_frame(const std::vector<LaserPoint>& points, double sca
   return true;
 }
 
-void HeliosBackend::blackout() {
-  if (initialized_ && write_frame_high_resolution_) {
-    detail::HeliosHighResolutionPoint point{32768, 32768, 0, 0, 0};
-    write_frame_high_resolution_(static_cast<unsigned int>(device_), 30000, 0, &point, 1);
-  }
+bool HeliosBackend::blackout() {
+  const std::vector<LaserPoint> black_frame{{0.0, 0.0, {}, true}};
+  return send_frame(black_frame, 30000.0);
 }
 
 }  // namespace laser_projection

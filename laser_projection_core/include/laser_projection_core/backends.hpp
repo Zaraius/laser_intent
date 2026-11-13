@@ -17,7 +17,7 @@ public:
   UdpBackend(std::string host, unsigned short port);
   bool initialize() override;
   bool send_frame(const std::vector<LaserPoint>& points, double scan_rate) override;
-  void blackout() override;
+  bool blackout() override;
 private:
   std::string host_;
   unsigned short port_;
@@ -30,7 +30,7 @@ public:
   ~HeliosBackend() override;
   bool initialize() override;
   bool send_frame(const std::vector<LaserPoint>& points, double scan_rate) override;
-  void blackout() override;
+  bool blackout() override;
 private:
   std::string library_path_;
   void* library_{nullptr};
